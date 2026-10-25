@@ -207,6 +207,54 @@ def generate_api(body:GenerateIn,s:Session=Depends(db)):
     try:
         return generate([p.model_dump() for p in body.players],body.mode,scores_from_db(s),body.diff_limit,body.use_diff,body.recent_n if body.use_recent else 0,history)
     except ValueError as e: raise HTTPException(422,str(e))
+class ManualMatchIn(BaseModel):
+    played_at:datetime
+    winner:str
+    teams:dict[str,dict[str,str]]
+
+@app.post('/api/matches/manual')
+def record_manual(body:ManualMatchIn,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
+    if body.winner not in ('A','B') or set(body.teams)!= {'A','B'}:
+        raise HTTPException(422,'A/B팀과 승리팀을 확인하세요.')
+    played=body.played_at
+    if played.tzinfo is None:
+        raise HTTPException(422,'경기 날짜에 시간대가 필요합니다.')
+    played=played.astimezone(timezone.utc)
+    if played>datetime.now(timezone.utc)+timedelta(minutes=5):
+        raise HTTPException(422,'미래 경기는 등록할 수 없습니다.')
+    if played.year<2000:
+        raise HTTPException(422,'경기 날짜가 올바르지 않습니다.')
+    all_names=[]
+    for team in ('A','B'):
+        if set(body.teams[team])!=set(ROLES):
+            raise HTTPException(422,'각 팀의 캐릭터를 모두 지정하세요.')
+        all_names.extend(body.teams[team].values())
+    all_names=[n.strip() for n in all_names]
+    if any(not n or len(n)>100 for n in all_names) or len(set(all_names))!=8:
+        raise HTTPException(422,'닉네임 8명이 중복 없이 필요합니다.')
+    saved={p.name:json.loads(p.roles_json) for p in s.scalars(select(Profile).where(Profile.name.in_(all_names))).all()}
+    if len(saved)!=8: raise HTTPException(422,'등록된 프로필 8명을 선택하세요.')
+    score_table=scores_from_db(s)
+    players=[]
+    totals={'A':0,'B':0}
+    for team in ('A','B'):
+        for role in ROLES:
+            name=body.teams[team][role].strip()
+            tier=saved[name].get(role)
+            if tier not in TIERS:
+                raise HTTPException(422,f'{name}님은 {role} 가능 캐릭터로 등록되어 있지 않습니다.')
+            points=score_table[role][tier]
+            totals[team]+=points
+            players.append((team,role,name,tier,points))
+    mid=str(uuid.uuid4())
+    s.add(Match(id=mid,created_at=played,winner=body.winner,score_a=totals['A'],score_b=totals['B']))
+    for team,role,name,tier,points in players:
+        s.add(MatchPlayer(match_id=mid,name=name,role=role,tier=tier,points=points,team=team))
+    s.commit()
+    logger.info('Manual match recorded: id=%s, played_at=%s',mid,played.isoformat())
+    return {'ok':True,'id':mid}
+
 @app.post('/api/matches')
 def record(body:RecordIn,s:Session=Depends(db)):
     if body.winner not in ('A','B'): raise HTTPException(422,'승리팀은 A 또는 B입니다.')
