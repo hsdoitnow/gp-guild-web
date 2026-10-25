@@ -15,7 +15,7 @@ if DATABASE_URL.startswith('postgresql://'): DATABASE_URL=DATABASE_URL.replace('
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger=logging.getLogger('gp_guild.startup')
 IS_SQLITE=DATABASE_URL.startswith('sqlite:')
-connect_args={'check_same_thread':False} if IS_SQLITE else {'connect_timeout':8, 'options':'-c statement_timeout=15000 -c lock_timeout=8000'}
+connect_args={'check_same_thread':False} if IS_SQLITE else {'connect_timeout':8}  # Neon pooler does not accept startup options
 logger.info('Configuring database engine (backend=%s)', 'sqlite' if IS_SQLITE else 'postgresql')
 engine=create_engine(DATABASE_URL, pool_pre_ping=True, pool_timeout=10, connect_args=connect_args)
 SessionLocal=sessionmaker(bind=engine)
