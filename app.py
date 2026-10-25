@@ -366,8 +366,8 @@ def stats(name:str|None=None,season_id:int|None=None,role:str|None=None,s:Sessio
         r=obj['by_role'].setdefault(role,{'wins':0,'losses':0});r['wins']+=won;r['losses']+=1-won
     result=[]
     for p in people.values():
-        p['total']=p['wins']+p['losses'];p['win_rate']=round(100*p['wins']/p['total'],1)
+        p['total']=p['wins']+p['losses'];p['win_rate']=round(100*p['wins']/p['total'],1);p['score']=p['wins']*10+p['losses']*2
         for r in p['by_role'].values():
-            r['total']=r['wins']+r['losses'];r['win_rate']=round(100*r['wins']/r['total'],1)
+            r['total']=r['wins']+r['losses'];r['win_rate']=round(100*r['wins']/r['total'],1);r['score']=r['wins']*10+r['losses']*2
         result.append(p)
-    return sorted(result,key=lambda p:(-p['win_rate'],-p['total'],p['name']))
+    return sorted(result,key=lambda p:(-p['score'],-p['wins'],-p['win_rate'],p['name']))
