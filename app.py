@@ -1,5 +1,5 @@
 import os, json, uuid, time, hmac, hashlib, base64, secrets
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, time as dt_time, timedelta
 from pathlib import Path
 from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
@@ -40,6 +40,12 @@ class MatchPlayer(Base):
     points=Column(Integer,nullable=False)
     team=Column(String(1),nullable=False)
     __table_args__=(UniqueConstraint('match_id','name'),)
+class Season(Base):
+    __tablename__='seasons'
+    id=Column(Integer,primary_key=True,autoincrement=True)
+    name=Column(String(100),nullable=False,unique=True)
+    start_date=Column(DateTime(timezone=True),nullable=False)
+    end_date=Column(DateTime(timezone=True),nullable=False)  # exclusive UTC bound
 Base.metadata.create_all(engine)
 app=FastAPI(title='GP길드 PK 팀 생성기')
 app.mount('/static',StaticFiles(directory=Path(__file__).parent/'static'),name='static')
@@ -113,6 +119,10 @@ class RecordIn(BaseModel):
     participants:list[dict]
     winner:str
     scores:dict|None=None
+class SeasonIn(BaseModel):
+    name:str=Field(min_length=1,max_length=100)
+    start_date:date
+    end_date:date
 class ScoresIn(BaseModel):
     scores:dict[str,dict[str,int]]
 
@@ -229,10 +239,67 @@ def matches(limit:int=Query(50,ge=1,le=200),s:Session=Depends(db)):
     grouped={}
     for p in parts: grouped.setdefault(p.match_id,[]).append({'name':p.name,'role':p.role,'tier':p.tier,'points':p.points,'team':p.team})
     return [{'id':m.id,'created_at':m.created_at.isoformat(),'winner':m.winner,'scores':{'A':m.score_a,'B':m.score_b},'participants':grouped.get(m.id,[])} for m in ms]
+def season_bounds(s:Session,season_id:int|None):
+    if season_id is None:return None
+    season=s.get(Season,season_id)
+    if not season:raise HTTPException(404,'시즌을 찾을 수 없습니다.')
+    return season
+
+def as_utc(value):
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+def season_payload(season:Season):
+    kst=timezone(timedelta(hours=9))
+    return {'id':season.id,'name':season.name,'start_date':as_utc(season.start_date).astimezone(kst).date().isoformat(),
+            'end_date':(as_utc(season.end_date).astimezone(kst)-timedelta(days=1)).date().isoformat()}
+
+@app.get('/api/seasons')
+def list_seasons(s:Session=Depends(db)):
+    return [season_payload(x) for x in s.scalars(select(Season).order_by(Season.start_date.desc())).all()]
+
+def check_season(body:SeasonIn,s:Session,exclude:int|None=None):
+    if not body.name.strip() or body.start_date>body.end_date:raise HTTPException(422,'시즌명과 시작·종료일을 확인하세요.')
+    start=datetime.combine(body.start_date,dt_time.min,tzinfo=timezone.utc)-timedelta(hours=9)
+    end=datetime.combine(body.end_date+timedelta(days=1),dt_time.min,tzinfo=timezone.utc)-timedelta(hours=9)
+    for old in s.scalars(select(Season)).all():
+        if old.id==exclude:continue
+        if old.name==body.name.strip():raise HTTPException(409,'동일한 시즌명이 존재합니다.')
+        if start<as_utc(old.end_date) and end>as_utc(old.start_date):raise HTTPException(409,'기존 시즌과 기간이 겹칩니다.')
+    return start,end
+
+@app.post('/api/seasons')
+def create_season(body:SeasonIn,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
+    start,end=check_season(body,s)
+    item=Season(name=body.name.strip(),start_date=start,end_date=end)
+    s.add(item);s.commit();s.refresh(item)
+    return season_payload(item)
+
+@app.put('/api/seasons/{season_id}')
+def update_season(season_id:int,body:SeasonIn,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
+    item=s.get(Season,season_id)
+    if not item:raise HTTPException(404,'시즌을 찾을 수 없습니다.')
+    start,end=check_season(body,s,season_id)
+    item.name=body.name.strip();item.start_date=start;item.end_date=end
+    s.commit();return season_payload(item)
+
+@app.delete('/api/seasons/{season_id}')
+def delete_season(season_id:int,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
+    item=s.get(Season,season_id)
+    if not item:raise HTTPException(404,'시즌을 찾을 수 없습니다.')
+    s.delete(item);s.commit();return {'ok':True}
+
 @app.get('/api/stats')
-def stats(name:str|None=None,s:Session=Depends(db)):
+def stats(name:str|None=None,season_id:int|None=None,role:str|None=None,s:Session=Depends(db)):
     q=select(MatchPlayer.name,MatchPlayer.role,MatchPlayer.team,Match.winner).join(Match,Match.id==MatchPlayer.match_id)
     if name:q=q.where(MatchPlayer.name==name.strip())
+    if role:
+        if role not in ROLES:raise HTTPException(422,'캐릭터가 올바르지 않습니다.')
+        q=q.where(MatchPlayer.role==role)
+    season=season_bounds(s,season_id)
+    if season:q=q.where(Match.created_at>=season.start_date,Match.created_at<season.end_date)
     rows=s.execute(q).all();people={}
     for n,role,team,winner in rows:
         obj=people.setdefault(n,{'name':n,'wins':0,'losses':0,'by_role':{}})
