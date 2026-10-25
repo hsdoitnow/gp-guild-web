@@ -123,6 +123,7 @@ class GenerateIn(BaseModel):
     players:list[ProfileIn]
     mode:str='team'
     use_diff:bool=True
+    rotate_teams:bool=True
     diff_limit:int=Field(default=1,ge=0,le=20)
     use_recent:bool=True
     recent_n:int=Field(default=1,ge=0,le=5)
@@ -204,8 +205,16 @@ def generate_api(body:GenerateIn,s:Session=Depends(db)):
     games={}
     for name,role,created,mid in rows: games.setdefault(mid,{})[name]=role
     history=list(reversed(list(games.values())))
+    previous_teams=None
+    if body.mode=='team' and body.rotate_teams:
+        # Latest finalized match for exactly the same 8 players.
+        latest=s.scalar(select(Match).order_by(Match.created_at.desc(),Match.id.desc()).limit(1))
+        if latest:
+            members=s.scalars(select(MatchPlayer).where(MatchPlayer.match_id==latest.id)).all()
+            if len(members)==8 and {p.name for p in members}=={p.name.strip() for p in body.players}:
+                previous_teams={t:{p.name for p in members if p.team==t} for t in ('A','B')}
     try:
-        return generate([p.model_dump() for p in body.players],body.mode,scores_from_db(s),body.diff_limit,body.use_diff,body.recent_n if body.use_recent else 0,history)
+        return generate([p.model_dump() for p in body.players],body.mode,scores_from_db(s),body.diff_limit,body.use_diff,body.recent_n if body.use_recent else 0,history,previous_teams)
     except ValueError as e: raise HTTPException(422,str(e))
 class ManualMatchIn(BaseModel):
     played_at:datetime
