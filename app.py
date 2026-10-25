@@ -1,7 +1,7 @@
-import os, json, uuid
+import os, json, uuid, time, hmac, hashlib, base64, secrets
 from datetime import datetime, timezone
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -45,6 +45,60 @@ app=FastAPI(title='GP길드 PK 팀 생성기')
 app.mount('/static',StaticFiles(directory=Path(__file__).parent/'static'),name='static')
 def db():
     with SessionLocal() as s: yield s
+
+# Signed, expiring, HttpOnly admin cookie. Password is never sent to the client after login.
+ADMIN_PASSWORD=os.getenv('ADMIN_PASSWORD','')
+SESSION_KEY=hashlib.sha256((os.getenv('ADMIN_SESSION_SECRET') or ('gp-admin:'+ADMIN_PASSWORD)).encode()).digest()
+COOKIE_NAME='gp_admin_session'
+SESSION_SECONDS=8*60*60
+LOGIN_ATTEMPTS={}
+def token_for_admin():
+    expiry=str(int(time.time())+SESSION_SECONDS)
+    sig=hmac.new(SESSION_KEY,expiry.encode(),hashlib.sha256).hexdigest()
+    return expiry+'.'+sig
+def is_admin(request:Request):
+    if not ADMIN_PASSWORD:return False
+    raw=request.cookies.get(COOKIE_NAME,'')
+    try:
+        expiry,sig=raw.split('.',1)
+        if int(expiry)<time.time():return False
+        expected=hmac.new(SESSION_KEY,expiry.encode(),hashlib.sha256).hexdigest()
+        return hmac.compare_digest(sig,expected)
+    except (ValueError,TypeError):return False
+def require_admin(request:Request):
+    if not is_admin(request):raise HTTPException(403,'관리자 로그인이 필요합니다.')
+def same_origin(request:Request):
+    origin=request.headers.get('origin')
+    if origin:
+        from urllib.parse import urlsplit
+        origin_host=urlsplit(origin).netloc.lower()
+        target_host=request.headers.get('host','').lower()
+        if origin_host!=target_host:raise HTTPException(403,'허용되지 않은 요청 출처입니다.')
+class AdminLoginIn(BaseModel):
+    password:str
+@app.get('/api/admin/status')
+def admin_status(request:Request):
+    return {'is_admin':is_admin(request),'configured':bool(ADMIN_PASSWORD)}
+@app.post('/api/admin/login')
+def admin_login(body:AdminLoginIn,request:Request,response:Response):
+    same_origin(request)
+    if not ADMIN_PASSWORD:raise HTTPException(503,'Render 환경변수 ADMIN_PASSWORD를 설정하세요.')
+    ip=request.client.host if request.client else 'unknown'
+    now=time.time()
+    attempts=[t for t in LOGIN_ATTEMPTS.get(ip,[]) if now-t<900]
+    if len(attempts)>=10:raise HTTPException(429,'로그인 시도가 많습니다. 15분 뒤 다시 시도하세요.')
+    if not hmac.compare_digest(body.password,ADMIN_PASSWORD):
+        attempts.append(now);LOGIN_ATTEMPTS[ip]=attempts
+        raise HTTPException(401,'비밀번호가 올바르지 않습니다.')
+    LOGIN_ATTEMPTS.pop(ip,None)
+    secure=request.url.scheme=='https' or request.headers.get('x-forwarded-proto')=='https'
+    response.set_cookie(COOKIE_NAME,token_for_admin(),max_age=SESSION_SECONDS,httponly=True,secure=secure,samesite='lax',path='/')
+    return {'ok':True}
+@app.post('/api/admin/logout')
+def admin_logout(request:Request,response:Response):
+    same_origin(request)
+    response.delete_cookie(COOKIE_NAME,path='/')
+    return {'ok':True}
 class ProfileIn(BaseModel):
     name:str=Field(min_length=1,max_length=100)
     roles:dict[str,str]
@@ -79,7 +133,8 @@ def health(): return {'status':'ok'}
 def config(s:Session=Depends(db)):
     return {'roles':ROLES,'tiers':TIERS,'scores':scores_from_db(s)}
 @app.put('/api/config/scores')
-def save_scores(body:ScoresIn,s:Session=Depends(db)):
+def save_scores(body:ScoresIn,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
     try: clean={r:{t:int(body.scores[r][t]) for t in TIERS} for r in ROLES}
     except (KeyError,TypeError,ValueError): raise HTTPException(422,'모든 캐릭터/티어 점수가 필요합니다.')
     if any(not 0<=v<=99 for row in clean.values() for v in row.values()): raise HTTPException(422,'점수는 0~99만 허용합니다.')
@@ -91,7 +146,8 @@ def save_scores(body:ScoresIn,s:Session=Depends(db)):
 def profiles(s:Session=Depends(db)):
     return [{'name':p.name,'roles':json.loads(p.roles_json)} for p in s.scalars(select(Profile).order_by(Profile.name)).all()]
 @app.put('/api/profiles')
-def upsert_profile(body:ProfileIn,s:Session=Depends(db)):
+def upsert_profile(body:ProfileIn,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
     name=body.name.strip()
     if not name: raise HTTPException(422,'이름을 입력하세요.')
     validate_roles(body.roles)
@@ -100,12 +156,14 @@ def upsert_profile(body:ProfileIn,s:Session=Depends(db)):
     else: s.add(Profile(name=name,roles_json=json.dumps(body.roles,ensure_ascii=False)))
     s.commit(); return {'ok':True}
 @app.delete('/api/profiles/{name}')
-def delete_profile(name:str,s:Session=Depends(db)):
+def delete_profile(name:str,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
     p=s.get(Profile,name)
     if not p: raise HTTPException(404,'프로필이 없습니다.')
     s.delete(p);s.commit();return {'ok':True}
 @app.post('/api/profiles/import')
-def import_profiles(data:dict[str,dict],s:Session=Depends(db)):
+def import_profiles(data:dict[str,dict],request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
     if len(data)>2000: raise HTTPException(422,'한 번에 2000명 이하만 가져올 수 있습니다.')
     for name,payload in data.items():
         if not isinstance(name,str) or not name.strip() or len(name)>100 or not isinstance(payload,dict): raise HTTPException(422,'프로필 형식 오류')
@@ -143,6 +201,26 @@ def record(body:RecordIn,s:Session=Depends(db)):
     s.add(Match(id=mid,winner=body.winner,score_a=scores.get('A'),score_b=scores.get('B')))
     for p in body.participants: s.add(MatchPlayer(match_id=mid,name=p['name'].strip(),role=p['role'],tier=p['tier'],points=p['points'],team=p['team']))
     s.commit();return {'ok':True,'id':mid}
+class MatchEditIn(BaseModel):
+    winner:str
+@app.patch('/api/matches/{match_id}')
+def edit_match(match_id:str,body:MatchEditIn,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
+    if body.winner not in ('A','B'):raise HTTPException(422,'승리팀은 A 또는 B입니다.')
+    match=s.get(Match,match_id)
+    if not match:raise HTTPException(404,'경기 기록을 찾을 수 없습니다.')
+    match.winner=body.winner
+    s.commit()
+    return {'ok':True}
+@app.delete('/api/matches/{match_id}')
+def delete_match(match_id:str,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
+    match=s.get(Match,match_id)
+    if not match:raise HTTPException(404,'경기 기록을 찾을 수 없습니다.')
+    s.query(MatchPlayer).filter(MatchPlayer.match_id==match_id).delete(synchronize_session=False)
+    s.delete(match)
+    s.commit()
+    return {'ok':True}
 @app.get('/api/matches')
 def matches(limit:int=Query(50,ge=1,le=200),s:Session=Depends(db)):
     ms=s.scalars(select(Match).order_by(Match.created_at.desc(),Match.id.desc()).limit(limit)).all()
