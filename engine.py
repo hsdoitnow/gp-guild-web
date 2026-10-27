@@ -50,6 +50,19 @@ def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=
             previous_teams=None  # Different 8-player roster: no forced rotation.
     pmap={p['name']:p for p in clean}
     best=None
+    def fairness_key(assignment):
+        # Minimize the worst player's projected imbalance first.
+        spreads=[]
+        diversity=0
+        for name,role in assignment.items():
+            available=pmap[name]['role_tiers']
+            counts={r:recent_roles[name].count(r)+(1 if r==role else 0) for r in available}
+            spreads.append(max(counts.values())-min(counts.values()))
+            diversity+=recent_roles[name].count(role)
+            if recent_n and role in recent_roles[name][:recent_n]:
+                diversity+=10
+        return (max(spreads),sum(spreads),diversity)
+
     # Keep the original hard constraints; prefer assignments that distribute roles
     # evenly across each player’s last ten matches.
     for _ in range(1200):
@@ -58,11 +71,11 @@ def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=
         by_role={r:[] for r in ROLES}
         for name,role in assignment.items(): by_role[role].append(name)
         participants=[{'name':name,'role':role,'tier':pmap[name]['role_tiers'][role],'points':pmap[name]['role_points'][role]} for name,role in assignment.items()]
-        diversity=sum(recent_roles[name].count(role) + (10 if recent_n and role in recent_roles[name][:recent_n] else 0) for name,role in assignment.items())
+        quality=fairness_key(assignment)
         if mode=='char':
             candidate={'mode':mode,'assignment':assignment,'participants':participants,'teams':None,'diff':None,'scores':None}
-            if best is None or diversity<best[0]: best=(diversity,candidate)
-            if diversity==0: break
+            if best is None or quality<best[0]: best=(quality,candidate)
+            if quality==(0,0,0): break
             continue
         combos=[]
         for dru in by_role['드루이드']:
@@ -93,8 +106,8 @@ def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=
         candidate={'mode':mode,'assignment':assignment,'participants':participants,'teams':{'A':{assignment[n]:n for n in team_a},'B':{assignment[n]:n for n in team_b}},'diff':diff,'scores':{'A':sa,'B':sb},'rotation_applied':bool(previous_teams)}
         # The score difference is already constrained above. Diversity decides
         # between feasible assignments; equal diversity keeps some randomness.
-        if best is None or diversity<best[0] or (diversity==best[0] and random.random()<0.15): best=(diversity,candidate)
-        if diversity==0: break
+        if best is None or quality<best[0] or (quality==best[0] and random.random()<0.15): best=(quality,candidate)
+        if quality==(0,0,0): break
     if best is not None: return best[1]
     if recent_n>0:
         # Strict recent-role exclusions can make 2-per-role + team rotation
