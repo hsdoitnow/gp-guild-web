@@ -1,8 +1,8 @@
 """Original PyQt team's role assignment and score-balance logic, extracted for the web."""
 import random
 ROLES = ['드루이드','어쌔','네크','슴딘']
-TIERS = ['SSS','SS','S','A']
-DEFAULT_SCORES = {r:dict(zip(TIERS,[6,5,4,3])) for r in ROLES}
+TIERS = ['SSS+','SSS','SS+','SS','S+','S','A+','A']
+DEFAULT_SCORES = {r:dict(zip(TIERS,[6.5,6,5.5,5,4.5,4,3.5,3])) for r in ROLES}
 
 def assign_roles_two_each(players):
     remaining={r:2 for r in ROLES}
@@ -41,7 +41,7 @@ def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=
             banned=set(recent_roles[name][:recent_n])
             filtered=[r for r in allowed if r not in banned]
             if filtered: allowed=filtered
-        clean.append({'name':name,'allowed_roles':allowed,'role_tiers':tiers,'role_points':{r:int(score_points[r][t]) for r,t in tiers.items()}})
+        clean.append({'name':name,'allowed_roles':allowed,'role_tiers':tiers,'role_points':{r:float(score_points[r][t]) for r,t in tiers.items()}})
     # A/B labels are arbitrary: require a real 2+2 mix of the previous teams.
     previous_teams=previous_teams or None
     if previous_teams:
