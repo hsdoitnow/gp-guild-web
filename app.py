@@ -5,7 +5,7 @@ from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, ForeignKey, Text, select, func, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, ForeignKey, Text, select, func, UniqueConstraint, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from engine import ROLES, TIERS, DEFAULT_SCORES, generate
 
@@ -33,8 +33,8 @@ class Match(Base):
     id=Column(String(36),primary_key=True)
     created_at=Column(DateTime(timezone=True),default=lambda:datetime.now(timezone.utc),nullable=False)
     winner=Column(String(1),nullable=False)
-    score_a=Column(Integer)
-    score_b=Column(Integer)
+    score_a=Column(Float)
+    score_b=Column(Float)
 class MatchPlayer(Base):
     __tablename__='match_players'
     id=Column(Integer,primary_key=True,autoincrement=True)
@@ -42,7 +42,7 @@ class MatchPlayer(Base):
     name=Column(String(100),nullable=False,index=True)
     role=Column(String(30),nullable=False)
     tier=Column(String(10),nullable=False)
-    points=Column(Integer,nullable=False)
+    points=Column(Float,nullable=False)
     team=Column(String(1),nullable=False)
     __table_args__=(UniqueConstraint('match_id','name'),)
 class Season(Base):
@@ -54,6 +54,11 @@ class Season(Base):
 logger.info('Database schema initialization starting')
 try:
     Base.metadata.create_all(engine)
+    # Upgrade historical integer score columns in-place; preserve all match rows.
+    if not IS_SQLITE:
+        with engine.begin() as conn:
+            for table, col in [('matches','score_a'),('matches','score_b'),('match_players','points')]:
+                conn.execute(text(f'ALTER TABLE {table} ALTER COLUMN {col} TYPE DOUBLE PRECISION USING {col}::double precision'))
 except Exception:
     logger.exception('Database schema initialization failed. Check Neon availability, DATABASE_URL, and DB permissions.')
     raise
@@ -124,7 +129,7 @@ class GenerateIn(BaseModel):
     mode:str='team'
     use_diff:bool=True
     rotate_teams:bool=True
-    diff_limit:int=Field(default=1,ge=0,le=20)
+    diff_limit:float=Field(default=1,ge=0,le=20)
     use_recent:bool=True
     recent_n:int=Field(default=1,ge=0,le=5)
 class RecordIn(BaseModel):
@@ -136,7 +141,7 @@ class SeasonIn(BaseModel):
     start_date:date
     end_date:date
 class ScoresIn(BaseModel):
-    scores:dict[str,dict[str,int]]
+    scores:dict[str,dict[str,float]]
 
 def validate_roles(roles):
     if any(r not in ROLES or t not in TIERS for r,t in roles.items()): raise HTTPException(422,'캐릭터/티어 값이 올바르지 않습니다.')
@@ -145,8 +150,8 @@ def scores_from_db(s):
     if not setting: return DEFAULT_SCORES
     try:
         raw=json.loads(setting.value)
-        return {r:{t:int(raw[r][t]) for t in TIERS} for r in ROLES}
-    except (ValueError,TypeError,KeyError): return DEFAULT_SCORES
+        return {r:{t:float(raw.get(r,{}).get(t,DEFAULT_SCORES[r][t])) for t in TIERS} for r in ROLES}
+    except (ValueError,TypeError,KeyError,AttributeError): return DEFAULT_SCORES
 @app.get('/')
 def index(): return FileResponse(Path(__file__).parent/'static'/'index.html')
 @app.get('/health')
@@ -157,7 +162,7 @@ def config(s:Session=Depends(db)):
 @app.put('/api/config/scores')
 def save_scores(body:ScoresIn,request:Request,s:Session=Depends(db)):
     same_origin(request);require_admin(request)
-    try: clean={r:{t:int(body.scores[r][t]) for t in TIERS} for r in ROLES}
+    try: clean={r:{t:float(body.scores[r][t]) for t in TIERS} for r in ROLES}
     except (KeyError,TypeError,ValueError): raise HTTPException(422,'모든 캐릭터/티어 점수가 필요합니다.')
     if any(not 0<=v<=99 for row in clean.values() for v in row.values()): raise HTTPException(422,'점수는 0~99만 허용합니다.')
     setting=s.get(Setting,'scores')
@@ -279,7 +284,7 @@ def record(body:RecordIn,s:Session=Depends(db)):
     names=set(); team_roles={'A':set(),'B':set()}; teams={'A':0,'B':0}
     for p in body.participants:
         name=p.get('name');role=p.get('role');tier=p.get('tier');team=p.get('team');points=p.get('points')
-        if not isinstance(name,str) or not name.strip() or len(name)>100 or name in names or role not in ROLES or tier not in TIERS or team not in teams or type(points)!=int or not 0<=points<=99: raise HTTPException(422,'참가자 정보가 올바르지 않습니다.')
+        if not isinstance(name,str) or not name.strip() or len(name)>100 or name in names or role not in ROLES or tier not in TIERS or team not in teams or type(points) not in (int,float) or not 0<=points<=99: raise HTTPException(422,'참가자 정보가 올바르지 않습니다.')
         if role in team_roles[team]: raise HTTPException(422,'팀별 캐릭터가 중복되었습니다.')
         names.add(name);team_roles[team].add(role);teams[team]+=1
     if teams!={'A':4,'B':4} or any(team_roles[t]!=set(ROLES) for t in teams): raise HTTPException(422,'각 팀에 캐릭터별 1명씩 있어야 합니다.')
