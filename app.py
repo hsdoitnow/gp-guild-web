@@ -212,12 +212,25 @@ def generate_api(body:GenerateIn,s:Session=Depends(db)):
     history=list(reversed(list(games.values())))
     # Fetch each player’s own last 10 games (not the last 10 guild games).
     role_history={name:[] for name in [p.name.strip() for p in body.players]}
+    recent_exclusion_roles={}
+    cutoff=datetime.now(timezone.utc)-timedelta(hours=12)
     for name in role_history:
-        role_history[name]=list(s.scalars(
-            select(MatchPlayer.role).join(Match,Match.id==MatchPlayer.match_id)
+        records=s.execute(
+            select(MatchPlayer.role,Match.created_at).join(Match,Match.id==MatchPlayer.match_id)
             .where(MatchPlayer.name==name)
             .order_by(Match.created_at.desc(),Match.id.desc()).limit(10)
-        ).all())
+        ).all()
+        role_history[name]=[role for role,_ in records]
+        # Only the player's last match within the rolling 12-hour window
+        # triggers the hard exclusion; older matches still count for fairness.
+        recent_exclusion_roles[name]=[]
+        if records:
+            last_role,last_played=records[0]
+            if last_played is not None:
+                if last_played.tzinfo is None:
+                    last_played=last_played.replace(tzinfo=timezone.utc)
+                if cutoff<=last_played<=datetime.now(timezone.utc):
+                    recent_exclusion_roles[name]=[last_role]
     previous_teams=None
     if body.mode=='team' and body.rotate_teams:
         # Latest finalized match for exactly the same 8 players.
@@ -227,7 +240,7 @@ def generate_api(body:GenerateIn,s:Session=Depends(db)):
             if len(members)==8 and {p.name for p in members}=={p.name.strip() for p in body.players}:
                 previous_teams={t:{p.name for p in members if p.team==t} for t in ('A','B')}
     try:
-        return generate([p.model_dump() for p in body.players],body.mode,scores_from_db(s),body.diff_limit,body.use_diff,body.recent_n if body.use_recent else 0,history,previous_teams,role_history=role_history)
+        return generate([p.model_dump() for p in body.players],body.mode,scores_from_db(s),body.diff_limit,body.use_diff,body.recent_n if body.use_recent else 0,history,previous_teams,role_history=role_history,recent_exclusion_roles=recent_exclusion_roles)
     except ValueError as e: raise HTTPException(422,str(e))
 class ManualMatchIn(BaseModel):
     played_at:datetime
