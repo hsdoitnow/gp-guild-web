@@ -22,7 +22,7 @@ def assign_roles_two_each(players):
         return False
     return dict(assignment) if dfs(0) else None
 
-def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=1, history=None, previous_teams=None, min_team_changes=2, role_history=None):
+def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=1, history=None, previous_teams=None, min_team_changes=2, role_history=None, recent_exclusion_roles=None):
     if len(players)!=8: raise ValueError('플레이어 8명을 입력하세요.')
     names=[p['name'].strip() for p in players]
     if any(not n for n in names) or len(set(names))!=8: raise ValueError('8명의 서로 다른 닉네임을 입력하세요.')
@@ -31,6 +31,8 @@ def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=
     role_history=role_history or {}
     # Per-player 10 most recent completed matches, newest first.
     recent_roles={name:role_history.get(name,[])[:10] for name in names}
+    # None preserves compatibility with older callers; API supplies time-filtered roles.
+    exclusion_roles=recent_roles if recent_exclusion_roles is None else {name:recent_exclusion_roles.get(name,[]) for name in names}
     clean=[]
     for p in players:
         name=p['name'].strip(); tiers=p.get('roles',{})
@@ -38,7 +40,7 @@ def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=
         if any(r not in ROLES or t not in TIERS for r,t in tiers.items()): raise ValueError(f'{name}: 티어 설정이 올바르지 않습니다.')
         allowed=list(tiers)
         if recent_n>0 and len(allowed)>1:
-            banned=set(recent_roles[name][:recent_n])
+            banned=set(exclusion_roles[name][:recent_n])
             filtered=[r for r in allowed if r not in banned]
             if filtered: allowed=filtered
         clean.append({'name':name,'allowed_roles':allowed,'role_tiers':tiers,'role_points':{r:float(score_points[r][t]) for r,t in tiers.items()}})
@@ -59,7 +61,7 @@ def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=
             counts={r:recent_roles[name].count(r)+(1 if r==role else 0) for r in available}
             spreads.append(max(counts.values())-min(counts.values()))
             diversity+=recent_roles[name].count(role)
-            if recent_n and role in recent_roles[name][:recent_n]:
+            if recent_n and role in exclusion_roles[name][:recent_n]:
                 diversity+=10
         return (max(spreads),sum(spreads),diversity)
 
@@ -112,7 +114,7 @@ def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=
     if recent_n>0:
         # Strict recent-role exclusions can make 2-per-role + team rotation
         # impossible. Relax only that exclusion; retain a heavy penalty.
-        return generate(players,mode,score_points,diff_limit,use_diff,0,history,previous_teams,min_team_changes,role_history)
+        return generate(players,mode,score_points,diff_limit,use_diff,0,history,previous_teams,min_team_changes,role_history,recent_exclusion_roles)
     if previous_teams:
         raise ValueError('직전 경기 대비 팀별 2명 이상 변경하면서 캐릭터/점수 조건을 만족하는 조합이 없습니다. 점수차 제한을 완화하거나 옵션을 해제하세요.')
     raise ValueError('팀 배정 실패: 가능 캐릭터나 허용 점수차 조건을 완화해 주세요.')
