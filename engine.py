@@ -22,99 +22,144 @@ def assign_roles_two_each(players):
         return False
     return dict(assignment) if dfs(0) else None
 
-def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=1, history=None, previous_teams=None, min_team_changes=2, role_history=None, recent_exclusion_roles=None):
-    if len(players)!=8: raise ValueError('플레이어 8명을 입력하세요.')
-    names=[p['name'].strip() for p in players]
-    if any(not n for n in names) or len(set(names))!=8: raise ValueError('8명의 서로 다른 닉네임을 입력하세요.')
-    if mode not in ('char','team'): raise ValueError('잘못된 모드입니다.')
-    history=history or []
-    role_history=role_history or {}
-    # Per-player 10 most recent completed matches, newest first.
-    recent_roles={name:role_history.get(name,[])[:10] for name in names}
-    # None preserves compatibility with older callers; API supplies time-filtered roles.
-    exclusion_roles=recent_roles if recent_exclusion_roles is None else {name:recent_exclusion_roles.get(name,[]) for name in names}
-    clean=[]
-    for p in players:
-        name=p['name'].strip(); tiers=p.get('roles',{})
-        if not isinstance(tiers,dict) or not tiers: raise ValueError(f'{name}: 캐릭터를 선택하세요.')
-        if any(r not in ROLES or t not in TIERS for r,t in tiers.items()): raise ValueError(f'{name}: 티어 설정이 올바르지 않습니다.')
-        allowed=list(tiers)
-        if recent_n>0 and len(allowed)>1:
-            banned=set(exclusion_roles[name][:recent_n])
-            filtered=[r for r in allowed if r not in banned]
-            if filtered: allowed=filtered
-        clean.append({'name':name,'allowed_roles':allowed,'role_tiers':tiers,'role_points':{r:float(score_points[r][t]) for r,t in tiers.items()}})
-    # A/B labels are arbitrary: require a real 2+2 mix of the previous teams.
-    previous_teams=previous_teams or None
-    if previous_teams:
-        old_a=set(previous_teams['A']);old_b=set(previous_teams['B'])
-        if old_a|old_b != set(names) or len(old_a)!=4 or len(old_b)!=4:
-            previous_teams=None  # Different 8-player roster: no forced rotation.
-    pmap={p['name']:p for p in clean}
-    best=None
-    def fairness_key(assignment):
-        # Minimize the worst player's projected imbalance first.
-        spreads=[]
-        diversity=0
-        for name,role in assignment.items():
-            available=pmap[name]['role_tiers']
-            counts={r:recent_roles[name].count(r)+(1 if r==role else 0) for r in available}
-            spreads.append(max(counts.values())-min(counts.values()))
-            diversity+=recent_roles[name].count(role)
-            if recent_n and role in exclusion_roles[name][:recent_n]:
-                diversity+=10
-        return (max(spreads),sum(spreads),diversity)
+def generate(players, mode, score_points, diff_limit=1, use_diff=True, recent_n=1,
+             history=None, previous_teams=None, min_team_changes=2,
+             role_history=None, recent_exclusion_roles=None):
+    """Find feasible teams while minimizing the number of players repeating a recent role.
 
-    # Keep the original hard constraints; prefer assignments that distribute roles
-    # evenly across each player’s last ten matches.
-    for _ in range(1200):
-        assignment=assign_roles_two_each(clean)
-        if not assignment: break
-        by_role={r:[] for r in ROLES}
-        for name,role in assignment.items(): by_role[role].append(name)
-        participants=[{'name':name,'role':role,'tier':pmap[name]['role_tiers'][role],'points':pmap[name]['role_points'][role]} for name,role in assignment.items()]
-        quality=fairness_key(assignment)
-        if mode=='char':
-            candidate={'mode':mode,'assignment':assignment,'participants':participants,'teams':None,'diff':None,'scores':None}
-            if best is None or quality<best[0]: best=(quality,candidate)
-            if quality==(0,0,0): break
-            continue
-        combos=[]
-        for dru in by_role['드루이드']:
-          for nec in by_role['네크']:
-           for ass in by_role['어쌔']:
-            for smd in by_role['슴딘']:
-                team_a={dru,nec,ass,smd};team_b=set(assignment)-team_a
-                if previous_teams:
-                    # Each new team must have at least 2 players from EACH previous team.
-                    # This also rejects relabeling A/B without mixing players.
-                    if len(team_a & old_a)>4-min_team_changes or len(team_a & old_b)>4-min_team_changes: continue
-                    if len(team_b & old_a)>4-min_team_changes or len(team_b & old_b)>4-min_team_changes: continue
-                sa=sum(pmap[n]['role_points'][assignment[n]] for n in team_a)
-                sb=sum(pmap[n]['role_points'][assignment[n]] for n in team_b)
-                combos.append((abs(sa-sb),sa,sb,team_a,team_b))
-        if not combos: continue
-        if use_diff:
-            combos=[c for c in combos if c[0]<=diff_limit]
-            if not combos: continue
-            diffs=sorted({c[0] for c in combos}); weights=[1 if d==0 else .6 if d==1 else .4 if d==2 else .25 for d in diffs]
-            chosen=random.choices(diffs,weights=weights,k=1)[0]
-            combos=[c for c in combos if c[0]==chosen]
-        else:
-            mind=min(c[0] for c in combos);combos=[c for c in combos if c[0]==mind]
-        random.shuffle(combos)
-        diff,sa,sb,team_a,team_b=combos[0]
-        for p in participants: p['team']='A' if p['name'] in team_a else 'B'
-        candidate={'mode':mode,'assignment':assignment,'participants':participants,'teams':{'A':{assignment[n]:n for n in team_a},'B':{assignment[n]:n for n in team_b}},'diff':diff,'scores':{'A':sa,'B':sb},'rotation_applied':bool(previous_teams)}
-        # The score difference is already constrained above. Diversity decides
-        # between feasible assignments; equal diversity keeps some randomness.
-        if best is None or quality<best[0] or (quality==best[0] and random.random()<0.15): best=(quality,candidate)
-        if quality==(0,0,0): break
-    if best is not None: return best[1]
-    if recent_n>0:
-        # Strict recent-role exclusions can make 2-per-role + team rotation
-        # impossible. Relax only that exclusion; retain a heavy penalty.
-        return generate(players,mode,score_points,diff_limit,use_diff,0,history,previous_teams,min_team_changes,role_history,recent_exclusion_roles)
+    Hard requirements (role quotas, team composition, balance, and team rotation)
+    are never relaxed. A recent-role exclusion is relaxed for the fewest possible
+    players, rather than being switched off for everyone.
+    """
+    if len(players) != 8:
+        raise ValueError('플레이어 8명을 입력하세요.')
+    names = [p['name'].strip() for p in players]
+    if any(not n for n in names) or len(set(names)) != 8:
+        raise ValueError('8명의 서로 다른 닉네임을 입력하세요.')
+    if mode not in ('char', 'team'):
+        raise ValueError('잘못된 모드입니다.')
+    role_history = role_history or {}
+    recent_roles = {n: role_history.get(n, [])[:10] for n in names}
+    exclusions = (recent_roles if recent_exclusion_roles is None else
+                  {n: recent_exclusion_roles.get(n, []) for n in names})
+    pmap = {}
+    for p in players:
+        name = p['name'].strip()
+        tiers = p.get('roles', {})
+        if not isinstance(tiers, dict) or not tiers:
+            raise ValueError(f'{name}: 캐릭터를 선택하세요.')
+        if any(r not in ROLES or t not in TIERS for r, t in tiers.items()):
+            raise ValueError(f'{name}: 티어 설정이 올바르지 않습니다.')
+        pmap[name] = {'tiers': tiers,
+                      'points': {r: float(score_points[r][t]) for r, t in tiers.items()}}
+    old_a = old_b = None
     if previous_teams:
-        raise ValueError('직전 경기 대비 팀별 2명 이상 변경하면서 캐릭터/점수 조건을 만족하는 조합이 없습니다. 점수차 제한을 완화하거나 옵션을 해제하세요.')
+        old_a = set(previous_teams['A'])
+        old_b = set(previous_teams['B'])
+        if old_a | old_b != set(names) or len(old_a) != 4 or len(old_b) != 4:
+            old_a = old_b = None
+
+    # Smaller violation count is always better than any fairness improvement.
+    # Fairness is measured within each person's playable characters only.
+    def quality(assignment):
+        violations = 0
+        spreads = []
+        usage = 0
+        for name, role in assignment.items():
+            if recent_n > 0 and role in exclusions[name][:recent_n]:
+                violations += 1
+            counts = [recent_roles[name].count(r) + (r == role)
+                      for r in pmap[name]['tiers']]
+            spreads.append(max(counts) - min(counts))
+            usage += recent_roles[name].count(role)
+        return (violations, max(spreads), sum(spreads), usage)
+
+    # Enumerate valid character assignments, including those that repeat a role.
+    # With 8 players and 4 roles (2 each), this is small enough to avoid
+    # random sampling missing a feasible zero-violation assignment.
+    order = sorted(names, key=lambda n: len(pmap[n]['tiers']))
+    quotas = {r: 2 for r in ROLES}
+    assignment = {}
+    best_key = None
+    best_candidates = []
+
+    def consider():
+        nonlocal best_key, best_candidates
+        key = quality(assignment)
+        if best_key is not None and key > best_key:
+            return
+        participants = [{'name': n, 'role': assignment[n],
+                         'tier': pmap[n]['tiers'][assignment[n]],
+                         'points': pmap[n]['points'][assignment[n]]}
+                        for n in names]
+        if mode == 'char':
+            candidates = [{'mode': 'char', 'assignment': dict(assignment),
+                           'participants': participants, 'teams': None,
+                           'diff': None, 'scores': None}]
+        else:
+            from itertools import product
+            by_role = {r: [n for n in names if assignment[n] == r] for r in ROLES}
+            candidates = []
+            for selected in product(*(by_role[r] for r in ROLES)):
+                team_a = set(selected)
+                team_b = set(names) - team_a
+                if old_a is not None:
+                    if (len(team_a & old_a) > 4 - min_team_changes or
+                        len(team_a & old_b) > 4 - min_team_changes or
+                        len(team_b & old_a) > 4 - min_team_changes or
+                        len(team_b & old_b) > 4 - min_team_changes):
+                        continue
+                sa = sum(pmap[n]['points'][assignment[n]] for n in team_a)
+                sb = sum(pmap[n]['points'][assignment[n]] for n in team_b)
+                diff = abs(sa - sb)
+                if use_diff and diff > diff_limit + 1e-9:
+                    continue
+                candidates.append({'mode': 'team', 'assignment': dict(assignment),
+                                   'participants': [dict(p, team='A' if p['name'] in team_a else 'B')
+                                                    for p in participants],
+                                   'teams': {'A': {assignment[n]: n for n in team_a},
+                                             'B': {assignment[n]: n for n in team_b}},
+                                   'diff': diff, 'scores': {'A': sa, 'B': sb},
+                                   'rotation_applied': old_a is not None})
+            if not use_diff and candidates:
+                min_diff = min(c['diff'] for c in candidates)
+                candidates = [c for c in candidates if c['diff'] <= min_diff + 1e-9]
+        if not candidates:
+            return
+        if best_key is None or key < best_key:
+            best_key = key
+            best_candidates = []
+        # Reservoir sampling over equal-quality candidates avoids keeping
+        # a potentially large list of equivalent combinations.
+        for candidate in candidates:
+            if len(best_candidates) < 64:
+                best_candidates.append(candidate)
+            else:
+                j = random.randrange(len(best_candidates) + 1)
+                if j < len(best_candidates):
+                    best_candidates[j] = candidate
+
+    def dfs(i):
+        if i == len(order):
+            consider()
+            return
+        name = order[i]
+        options = list(pmap[name]['tiers'])
+        random.shuffle(options)
+        for role in options:
+            if quotas[role] == 0:
+                continue
+            quotas[role] -= 1
+            assignment[name] = role
+            dfs(i + 1)
+            quotas[role] += 1
+            del assignment[name]
+
+    dfs(0)
+    if best_candidates:
+        result = random.choice(best_candidates)
+        result['recent_role_exceptions'] = best_key[0]
+        return result
+    if old_a is not None:
+        raise ValueError('팀별 2명 교환 및 점수 조건을 만족하는 조합이 없습니다. 점수차 제한을 완화하거나 팀 교환 옵션을 해제하세요.')
     raise ValueError('팀 배정 실패: 가능 캐릭터나 허용 점수차 조건을 완화해 주세요.')
