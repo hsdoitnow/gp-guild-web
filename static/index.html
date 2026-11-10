@@ -175,7 +175,7 @@ function playerAnalytics(p){
  ${box('⚔️ 나의 천적',p.nemesis,'analytics-negative')}
  ${box('🎯 상대하기 편한 플레이어',p.favorite_opponent,'analytics-positive')}
  ${box('🤝 BEST 듀오',p.best_duo,'analytics-positive')}
- ${box('📉 궁합 개선 필요 (WORST 듀오)',p.worst_duo,'analytics-neutral')}
+ ${box('📉 궁합 개선 필요 듀오',p.worst_duo,'analytics-neutral')}
  <div class="analytics-box"><h4>🔥 최다 연승 / 최다 연패</h4><div class="analytics-name analytics-positive">${p.best_streak}연승</div><div class="analytics-detail">최다 연승</div><div class="analytics-name analytics-negative" style="margin-top:12px">${p.worst_streak}연패</div><div class="analytics-detail">최다 연패</div><div class="analytics-detail">현재 ${p.current_streak>0?p.current_streak+'연승':p.current_streak<0?(-p.current_streak)+'연패':'-'}</div></div>
  <div class="analytics-box"><h4>📅 최근 10경기</h4><div class="analytics-name">${p.recent.filter(x=>x.won).length}승 ${p.recent.filter(x=>!x.won).length}패</div><div class="analytics-detail">최신 경기 → 과거 경기 (왼쪽부터)</div><div class="analytics-history">${recent}</div></div>
  </div>
