@@ -15,6 +15,10 @@
 .stats-name-option{display:block;width:100%;text-align:left;background:transparent;border:0;border-radius:5px;padding:9px 11px;color:#e6eaf2}
 .stats-name-option:hover,.stats-name-option:focus{background:#34435b;outline:none}
 .stats-name-empty{padding:9px;color:#a9b5ca;font-size:13px}
+/* Shared nickname picker: click again to show every registered player */
+.nickname-picker{position:relative;flex:1;min-width:150px}
+.nickname-picker>.name{width:100%}
+.nickname-picker .stats-name-options{z-index:60}
 /* Ranking: inline public role chips and podium decorations */
 .rank-name-roles{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .rank-role-list{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
@@ -88,7 +92,33 @@ async function refreshAdmin(){let state=await api('/admin/status');admin=state.i
 async function adminLogin(){try{await api('/admin/login',{method:'POST',body:JSON.stringify({password:$('adminPassword').value})});$('adminPassword').value='';await refreshAdmin();await fetchProfiles();toast('관리자 로그인 완료');}catch(e){toast(e.message)}}
 async function adminLogout(){try{await api('/admin/logout',{method:'POST'});await refreshAdmin();await fetchProfiles();toast('로그아웃 완료')}catch(e){toast(e.message)}}
 function tab(id){for(const e of document.querySelectorAll('main>section'))e.classList.toggle('hidden',e.id!==id);if(id==='ranking'){loadSeasons();loadRanking();}if(id==='matches')loadMatches();if(id==='scores'&&!admin){tab('admin');toast('관리자 로그인이 필요합니다.');return}if(id==='overview'||id==='profiles'){if(!admin){tab('admin');return}if(id==='overview')loadOverview();else loadAdminProfiles()}}
-function playerHtml(i){return `<div class="player" data-i="${i}"><div class="flex"><b>P${i+1}</b><input class="name" list="names" placeholder="닉네임" oninput="applyProfile(${i})" onchange="applyProfile(${i})" onblur="applyProfile(${i})"></div><div class="available-roles">닉네임을 선택하면 가능 캐릭터가 표시됩니다.</div></div>`}
+function playerHtml(i){return `<div class="player" data-i="${i}"><div class="flex"><b>P${i+1}</b><div class="nickname-picker"><input class="name" autocomplete="off" placeholder="닉네임" onfocus="showPlayerNames(this,true)" onclick="showPlayerNames(this,true)" oninput="applyProfile(${i});showPlayerNames(this,false)" onkeydown="playerNameKeydown(event,this)" onblur="applyProfile(${i})"><div class="stats-name-options hidden" role="listbox"></div></div></div><div class="available-roles">닉네임을 선택하면 가능 캐릭터가 표시됩니다.</div></div>`}
+function showPlayerNames(input,showAll=false){
+  const wrapper=input.closest('.nickname-picker'), box=wrapper.querySelector('.stats-name-options');
+  document.querySelectorAll('.nickname-picker .stats-name-options').forEach(el=>{if(el!==box)el.classList.add('hidden')});
+  const q=showAll?'':input.value.trim().toLocaleLowerCase('ko-KR');
+  const names=[...new Set(profiles.map(p=>p.name).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko-KR'));
+  const matches=names.filter(n=>n.toLocaleLowerCase('ko-KR').includes(q));
+  box.innerHTML=matches.length?matches.map(n=>`<button type="button" class="stats-name-option" role="option" data-name="${esc(n)}">${esc(n)}</button>`).join(''):'<div class="stats-name-empty">일치하는 닉네임이 없습니다.</div>';
+  box.querySelectorAll('button').forEach(btn=>btn.addEventListener('mousedown',ev=>{
+    ev.preventDefault();input.value=btn.dataset.name;box.classList.add('hidden');
+    input.dispatchEvent(new Event('change',{bubbles:true}));
+    const index=Number(input.closest('.player').dataset.i);applyProfile(index);
+  }));
+  box.classList.remove('hidden');
+}
+function playerNameKeydown(event,input){
+  const box=input.closest('.nickname-picker').querySelector('.stats-name-options');
+  if(event.key==='Escape'){box.classList.add('hidden');return}
+  if(event.key==='Enter'){
+    const first=box.querySelector('.stats-name-option');
+    if(!box.classList.contains('hidden')&&first){event.preventDefault();input.value=first.dataset.name;box.classList.add('hidden');applyProfile(Number(input.closest('.player').dataset.i))}
+  }
+  if(event.key==='ArrowDown'){event.preventDefault();showPlayerNames(input,false);box.querySelector('button')?.focus()}
+}
+document.addEventListener('click',event=>{
+  if(!event.target.closest('.nickname-picker'))document.querySelectorAll('.nickname-picker .stats-name-options').forEach(el=>el.classList.add('hidden'));
+});
 function player(i){return document.querySelector(`.player[data-i="${i}"]`)}
 function toggleAll(i,on){}
 function toggleRole(i,j,on){}
