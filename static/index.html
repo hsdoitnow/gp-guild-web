@@ -161,6 +161,8 @@ async function searchStats(){
   const data=await api('/player-analysis?'+params.toString());
   if(requestId!==statsRequestId)return;
   $('statsResult').innerHTML=playerAnalytics(data);
+  window.playerWinRateTrend=data.win_rate_trend||{};
+  updateWinRateChart();
  }catch(e){if(requestId!==statsRequestId)return;$('statsResult').innerHTML='';toast(e.message)}
 }
 function playerAnalytics(p){
@@ -174,11 +176,9 @@ function playerAnalytics(p){
  const roleBars=roles.map(role=>{const x=p.by_role[role]||{total:0,wins:0,losses:0,win_rate:0};return `<div class="analytics-bar-row"><div class="flex space"><span>${esc(role)} <small>${x.total}경기 · ${x.wins}승 ${x.losses}패</small></span><strong>${x.total?pct(x.win_rate):'-'}</strong></div><div class="analytics-bar-track"><div class="analytics-bar-fill" style="width:${Math.max(0,Math.min(100,x.win_rate))}%"></div></div></div>`}).join('');
  const months=p.monthly||[];
  const monthlyBars=months.length?months.map(x=>`<div class="analytics-bar-row"><div class="flex space"><span>${esc(x.month)} <small>${x.total}경기</small></span><strong>${pct(x.win_rate)}</strong></div><div class="analytics-bar-track"><div class="analytics-bar-fill" style="width:${Math.max(0,Math.min(100,x.win_rate))}%"></div></div></div>`).join(''):'<p class="muted">월별 데이터가 없습니다.</p>';
- const trend=p.score_trend||[];
- const sampled=trend.length>100?trend.filter((_,i)=>i%Math.ceil(trend.length/100)===0||i===trend.length-1):trend;
- const maxScore=Math.max(1,p.score);
- const points=sampled.map(x=>`${(20+(x.game-1)/Math.max(1,p.total-1)*570).toFixed(1)},${(128-x.score/maxScore*110).toFixed(1)}`).join(' ');
- const chart=trend.length?`<svg viewBox="0 0 610 155" class="analytics-trend" role="img" aria-label="경기별 누적 점수 추이"><line x1="20" y1="128" x2="590" y2="128" stroke="#566680"/><line x1="20" y1="18" x2="590" y2="18" stroke="#35465e" stroke-dasharray="4 5"/><polyline fill="none" stroke="#79c5f2" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${points}"/><text x="20" y="148" fill="#a9b5ca" font-size="12">1경기</text><text x="590" y="148" text-anchor="end" fill="#a9b5ca" font-size="12">${p.total}경기 · ${p.score}점</text></svg>`:'';
+ const trendByRole=p.win_rate_trend||{};
+ const trendSelect=`<label for="winRateRole">캐릭터 선택 <select id="winRateRole" onchange="updateWinRateChart()"><option value="전체">전체</option>${roles.map(role=>`<option value="${esc(role)}">${esc(role)}</option>`).join('')}</select></label>`;
+ const chart=`<div class="flex space" style="align-items:center;flex-wrap:wrap;gap:10px">${trendSelect}<strong id="winRateSummary"></strong></div><div id="winRateChart"></div>`;
  const achievements=(p.achievements||[]).map(a=>`<div class="analytics-achievement ${a.achieved?'earned':''}"><div class="analytics-achievement-icon">${a.achieved?'🏅':'🔒'}</div><strong>${esc(a.title)}</strong><small>${a.achieved?'달성':a.progress+' / '+a.target}</small></div>`).join('');
  return `<div class="panel"><h3>⚔️ ${esc(p.name)} · PLAYER ANALYTICS</h3>
  <div class="analytics-top">${metric(p.total,'총 경기')}${metric(p.wins,'승리')}${metric(p.losses,'패배')}${metric(pct(p.win_rate),'승률')}${metric(p.score,'Score')}${metric(p.best_streak+'연승','최다 연승')}</div>
@@ -191,9 +191,26 @@ function playerAnalytics(p){
  <div class="analytics-box"><h4>🎮 캐릭터별 승률</h4>${roleBars}</div>
  </div>
  <div class="analytics-section"><h3>🎮 캐릭터별 상세 전적</h3><div class="scroll"><table><tr><th>캐릭터</th><th>경기</th><th>승</th><th>패</th><th>승률</th><th>Score</th></tr>${roleRows}</table></div></div>
- <div class="analytics-grid"><div class="analytics-box"><h4>📊 월별 승률 추이</h4>${monthlyBars}</div><div class="analytics-box"><h4>📈 누적 Score 추이</h4>${chart}<p class="muted">경기 순서 기준 · 승리 +10점 / 패배 +2점</p></div></div>
+ <div class="analytics-grid"><div class="analytics-box"><h4>📊 월별 승률 추이</h4>${monthlyBars}</div><div class="analytics-box"><h4>📈 누적 승률 추이</h4>${chart}<p class="muted">선택한 기간의 경기 순서 기준 · 해당 캐릭터 경기만 집계 · 누적 승률(0~100%)</p></div></div>
  <div class="analytics-section"><h3>🏅 개인 업적</h3><div class="analytics-achievements">${achievements}</div></div>
  <p class="muted">모든 통계와 업적은 선택한 분석 기간의 경기 기록을 기준으로 계산합니다. 다른 플레이어와의 비교 정보는 표시하지 않습니다.</p></div>`;
+}
+
+function updateWinRateChart(){
+ const sel=$('winRateRole'), host=$('winRateChart'), summary=$('winRateSummary');
+ if(!sel||!host||!summary)return;
+ const role=sel.value, data=(window.playerWinRateTrend||{})[role]||[];
+ if(!data.length){summary.textContent='0경기';host.innerHTML='<p class="muted">해당 캐릭터의 경기 기록이 없습니다.</p>';return;}
+ const last=data[data.length-1];
+ summary.textContent=`${last.total}경기 · ${last.wins}승 ${last.losses}패 · ${Number(last.win_rate).toFixed(1)}%`;
+ const w=610,h=200,left=45,right=590,top=16,bottom=164;
+ const xx=i=>left+(data.length===1?0:i/(data.length-1)*(right-left));
+ const yy=v=>bottom-(Number(v)/100)*(bottom-top);
+ // Display every match in the line; retain full data for accurate hover information.
+ const points=data.map((d,i)=>`${xx(i).toFixed(2)},${yy(d.win_rate).toFixed(2)}`).join(' ');
+ const grid=[0,25,50,75,100].map(v=>`<line x1="${left}" y1="${yy(v)}" x2="${right}" y2="${yy(v)}" stroke="#45556d" stroke-dasharray="3 5"/><text x="${left-7}" y="${yy(v)+4}" text-anchor="end" fill="#a9b5ca" font-size="11">${v}%</text>`).join('');
+ const dots=data.map((d,i)=>`<circle cx="${xx(i).toFixed(2)}" cy="${yy(d.win_rate).toFixed(2)}" r="${data.length>100?4:5}" fill="transparent" stroke="transparent" stroke-width="9"><title>${d.game}경기 · ${d.wins}승 ${d.losses}패 · ${Number(d.win_rate).toFixed(1)}% · ${new Date(d.date).toLocaleDateString('ko-KR')}</title></circle>`).join('');
+ host.innerHTML=`<svg viewBox="0 0 ${w} ${h}" class="analytics-trend" role="img" aria-label="${esc(role)} 누적 승률 추이">${grid}<polyline points="${points}" fill="none" stroke="#79c5f2" stroke-width="2.8" stroke-linejoin="round" stroke-linecap="round"/>${dots}<text x="${left}" y="187" fill="#a9b5ca" font-size="12">첫 경기</text><text x="${right}" y="187" text-anchor="end" fill="#a9b5ca" font-size="12">${last.total}경기</text></svg>`;
 }
 
 let seasons=[];
