@@ -154,7 +154,15 @@ def scores_from_db(s):
         return {r:{t:float(raw.get(r,{}).get(t,DEFAULT_SCORES[r][t])) for t in TIERS} for r in ROLES}
     except (ValueError,TypeError,KeyError,AttributeError): return DEFAULT_SCORES
 @app.get('/')
-def index(): return FileResponse(Path(__file__).parent/'static'/'index.html')
+def index():
+    return FileResponse(
+        Path(__file__).parent / 'static' / 'index.html',
+        headers={
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0',
+        },
+    )
 @app.get('/health')
 def health(): return {'status':'ok'}
 @app.get('/api/config')
