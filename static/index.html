@@ -67,7 +67,7 @@
 <section id="profiles" class="hidden"><h2>공용 프로필 관리</h2><p class="muted">닉네임 목록은 공개되며 캐릭터별 티어 조회·등록·수정·삭제는 관리자만 가능합니다.</p><div class="flex"><select id="profilePick" onchange="loadProfileEditor()"></select><input id="profileName" placeholder="닉네임"><button class="admin-only hidden" onclick="saveProfile()">프로필 저장</button><button class="admin-only hidden" onclick="deleteProfile()">선택 삭제</button></div><div id="profileRoles" class="roles" style="max-width:550px;margin:20px 0"></div><div class="flex"><button onclick="exportProfiles()">JSON 내보내기</button><button class="admin-only hidden" onclick="document.getElementById('importFile').click()">JSON 가져오기</button><input type="file" id="importFile" accept="application/json,.json" class="hidden" onchange="importProfiles(event)"></div></section>
 <section id="overview" class="hidden"><h2>전체 프로필 현황 <small>관리자 전용</small></h2>
 <p class="muted">표에서 티어를 직접 수정하고 저장하거나, 엑셀 다운로드 후 편집하여 업로드할 수 있습니다. 빈칸은 해당 캐릭터 미등록입니다.</p>
-<div class="flex"><input id="overviewSearch" placeholder="닉네임 검색" oninput="renderOverview()"><button onclick="saveOverview()" class="primary">표 수정사항 저장</button><button onclick="downloadOverview()">엑셀 다운로드</button><button onclick="$('overviewFile').click()">엑셀 업로드</button><input type="file" id="overviewFile" accept=".xlsx" class="hidden" onchange="uploadOverview(event)"></div>
+<div class="flex"><input id="overviewSearch" placeholder="닉네임 검색" onfocus="showAllOverviewNames()" onclick="showAllOverviewNames()" oninput="filterOverviewNames()"><button onclick="saveOverview()" class="primary">표 수정사항 저장</button><button onclick="downloadOverview()">엑셀 다운로드</button><button onclick="$('overviewFile').click()">엑셀 업로드</button><input type="file" id="overviewFile" accept=".xlsx" class="hidden" onchange="uploadOverview(event)"></div>
 <p id="overviewInfo" class="muted"></p><div id="overviewTable" class="scroll"></div>
 <div id="overviewPreview" class="panel hidden"><h3>엑셀 변경사항 미리보기</h3><div id="overviewChanges" class="scroll"></div><button class="primary" onclick="applyExcelOverview()">검증된 변경사항 일괄 적용</button><button onclick="cancelExcelOverview()">취소</button></div>
 </section>
@@ -338,9 +338,12 @@ async function loadOverview(){
  if(!admin)return;
  try{overviewBase=await api('/admin/profiles-overview');overviewDraft=structuredClone(overviewBase);excelPreview=null;$('overviewPreview').classList.add('hidden');renderOverview()}catch(e){toast(e.message)}
 }
+let overviewShowAllOnFocus=false;
+function showAllOverviewNames(){overviewShowAllOnFocus=true;renderOverview()}
+function filterOverviewNames(){overviewShowAllOnFocus=false;renderOverview()}
 function renderOverview(){
  if(!admin)return;
- const q=$('overviewSearch').value.trim().toLowerCase();
+ const q=overviewShowAllOnFocus?'':$('overviewSearch').value.trim().toLowerCase();
  const rows=overviewDraft.filter(p=>p.name.toLowerCase().includes(q));
  $('overviewInfo').textContent=`전체 ${overviewDraft.length}명 / 표시 ${rows.length}명`;
  $('overviewTable').innerHTML='<table><tr><th>닉네임</th>'+roles.map(r=>`<th>${esc(r)}</th>`).join('')+'</tr>'+rows.map(p=>`<tr><th>${esc(p.name)}</th>`+roles.map(r=>`<td><select class="overview-tier" data-name="${esc(p.name)}" data-role="${esc(r)}" onchange="changeOverview(this)"><option value="">미등록</option>${tiers.map(t=>`<option value="${t}" ${p.roles[r]===t?'selected':''}>${t}</option>`).join('')}</select></td>`).join('')+'</tr>').join('')+'</table>';
