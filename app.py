@@ -540,7 +540,7 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
     q=select(Match, MatchPlayer.role, MatchPlayer.team).join(MatchPlayer,MatchPlayer.match_id==Match.id).where(MatchPlayer.name==name)
     if season:q=q.where(Match.created_at>=season.start_date,Match.created_at<season.end_date)
     rows=s.execute(q.order_by(Match.created_at.asc(),Match.id.asc())).all()
-    by_role=defaultdict(lambda:[0,0]);monthly=defaultdict(lambda:[0,0]);recent=[];wins=0
+    by_role=defaultdict(lambda:[0,0]);monthly=defaultdict(lambda:[0,0]);monthly_by_role={r:defaultdict(lambda:[0,0]) for r in ROLES};recent=[];wins=0
     best_streak=worst_streak=current=0;running_score=0;score_trend=[]
     cumulative_by_role=defaultdict(lambda:[0,0]); win_rate_trend={"전체":[]}; win_rate_trend.update({r:[] for r in ROLES})
     winning_roles=set()
@@ -551,6 +551,8 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
         if won:winning_roles.add(role)
         month=as_utc(match.created_at).astimezone(timezone(timedelta(hours=9))).strftime('%Y-%m')
         monthly[month][0]+=int(won);monthly[month][1]+=1
+        if role in monthly_by_role:
+            monthly_by_role[role][month][0]+=int(won);monthly_by_role[role][month][1]+=1
         current=max(0,current)+1 if won else min(0,current)-1
         best_streak=max(best_streak,current);worst_streak=max(worst_streak,-current)
         running_score+=10 if won else 2
@@ -573,6 +575,10 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
                'win_rate':round(100*qualified[0][1][0]/qualified[0][1][1],1)} if qualified else None
     monthly_data=[{'month':k,'wins':v[0],'losses':v[1]-v[0],'total':v[1],
                    'win_rate':round(100*v[0]/v[1],1)} for k,v in sorted(monthly.items())]
+    monthly_role_data={'전체':monthly_data}
+    for role in ROLES:
+        monthly_role_data[role]=[{'month':k,'wins':v[0],'losses':v[1]-v[0],'total':v[1],
+            'win_rate':round(100*v[0]/v[1],1)} for k,v in sorted(monthly_by_role[role].items())]
     busiest=max(monthly_data,key=lambda x:(x['total'],-int(x['month'].replace('-',''))),default=None)
     achievements=[{'title':'첫 승리','achieved':wins>=1,'progress':min(wins,1),'target':1},
                   {'title':'5연승','achieved':best_streak>=5,'progress':min(best_streak,5),'target':5},
@@ -589,5 +595,5 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
             'best_streak':best_streak,'worst_streak':worst_streak,'current_streak':current,
             'recent':list(reversed(recent10)),'recent_wins':recent_wins,
             'recent_win_rate':round(100*recent_wins/len(recent10),1) if recent10 else 0,
-            'best_role':best_role,'monthly':monthly_data,'busiest_month':busiest,
+            'best_role':best_role,'monthly':monthly_data,'monthly_by_role':monthly_role_data,'busiest_month':busiest,
             'score_trend':score_trend,'win_rate_trend':win_rate_trend,'achievements':achievements}
