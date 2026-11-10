@@ -7,6 +7,16 @@
 .available-roles .role-chip svg{width:15px;height:15px;flex:none;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .available-roles .role-druid{background:#276c48}.available-roles .role-necro{background:#7044a5}.available-roles .role-assassin{background:#a65b24}.available-roles .role-smiter{background:#2b689f}
 .available-roles .role-placeholder{color:#a9b5ca;font-size:12px}
+
+/* Ranking: inline public role chips and podium decorations */
+.rank-name-roles{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rank-role-list{display:inline-flex;align-items:center;gap:4px;flex-wrap:wrap}
+.rank-role-list .role-chip{display:inline-flex;align-items:center;gap:4px;border-radius:6px;padding:4px 7px;color:#fff;font-size:11px;font-weight:650;white-space:nowrap;line-height:1.2}
+.rank-role-list .role-chip svg{width:13px;height:13px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.rank-role-list .role-druid{background:#276c48}.rank-role-list .role-necro{background:#7044a5}.rank-role-list .role-assassin{background:#a65b24}.rank-role-list .role-smiter{background:#2b689f}
+.rank-position{display:inline-flex;align-items:center;gap:5px;font-weight:700;white-space:nowrap}
+.rank-position svg{width:21px;height:21px;stroke:currentColor;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.rank-first{color:#f7c948}.rank-second{color:#cbd5e1}.rank-third{color:#dca270}
 </style></head><body><main><h1>⚔️ GP길드 D2R TEAM PK</h1><small>팀 조합 · 전적 조회 · 길드 랭킹</small><nav><button onclick="tab('team')">팀 생성</button><button class="admin-only hidden" onclick="tab('profiles')">프로필 관리</button><button class="admin-only hidden" onclick="tab('overview')">전체 프로필 현황</button><button onclick="tab('scores')">점수 설정</button><button onclick="tab('stats')">전적 조회</button><button onclick="tab('ranking')">랭킹</button><button onclick="tab('matches')">경기 기록</button><button onclick="tab('admin')" id="adminNav">관리자 로그인</button></nav>
 <section id="admin" class="hidden"><h2>관리자 인증</h2><p class="muted" id="adminState">상태 확인 중...</p><div class="flex"><input id="adminPassword" type="password" autocomplete="current-password" placeholder="관리자 비밀번호" onkeydown="if(event.key==='Enter')adminLogin()"><button onclick="adminLogin()">로그인</button><button onclick="adminLogout()">로그아웃</button></div><p class="muted">로그인 유효시간: 8시간 · 프로필/점수 설정과 경기 기록 수정·삭제는 관리자만 가능합니다.</p></section><section id="team"><div class="flex"><label><input type="radio" name="mode" value="char"> 캐릭만 나누기 (2명씩)</label><label><input type="radio" name="mode" value="team" checked> 팀까지 짜기 (4vs4)</label></div><div class="flex" style="margin:14px 0"><label><input type="checkbox" id="useDiff" checked> 점수차 제한</label><label>허용 점수차 <input type="number" id="diff" min="0" max="20" step="0.5" value="1"></label><label><input type="checkbox" id="rotateTeams" checked> 직전 경기 대비 팀별 최소 2명 변경 (동일 8명)</label><label><input type="checkbox" id="useRecent" checked> 직전 캐릭 제외 + 최근 10경기 균등 배분 우선</label><label>최근 <input type="number" id="recent" min="0" max="5" value="1"> 판</label></div><h3>플레이어 8명</h3><div class="players" id="players"></div><div class="flex" style="margin:16px 0"><button class="primary" onclick="makeTeam()">🎲 조합 생성</button><button onclick="copyResult()">결과 복사 (공지용)</button><span class="pill" id="genCount">생성 횟수: 0</span></div><div id="result" class="result">플레이어를 입력한 후 조합 생성을 눌러주세요.</div><div id="recordBox" class="panel hidden"><h3>경기 결과 등록</h3><p class="muted">실제로 진행한 경기만 저장하세요. 등록 즉시 모든 길드원 전적에 반영됩니다.</p><div class="flex"><button onclick="recordMatch('A')">🏆 A팀 승리 등록</button><button onclick="recordMatch('B')">🏆 B팀 승리 등록</button></div></div></section>
 <section id="profiles" class="hidden"><h2>공용 프로필 관리</h2><p class="muted">닉네임 목록은 공개되며 캐릭터별 티어 조회·등록·수정·삭제는 관리자만 가능합니다.</p><div class="flex"><select id="profilePick" onchange="loadProfileEditor()"></select><input id="profileName" placeholder="닉네임"><button class="admin-only hidden" onclick="saveProfile()">프로필 저장</button><button class="admin-only hidden" onclick="deleteProfile()">선택 삭제</button></div><div id="profileRoles" class="roles" style="max-width:550px;margin:20px 0"></div><div class="flex"><button onclick="exportProfiles()">JSON 내보내기</button><button class="admin-only hidden" onclick="document.getElementById('importFile').click()">JSON 가져오기</button><input type="file" id="importFile" accept="application/json,.json" class="hidden" onchange="importProfiles(event)"></div></section>
@@ -86,7 +96,39 @@ async function loadSeasons(){try{seasons=await api('/seasons');let selected=$('r
 function editSeasonForm(){let item=seasons.find(x=>String(x.id)===$('seasonEdit').value);$('seasonName').value=item?.name||'';$('seasonStart').value=item?.start_date||'';$('seasonEnd').value=item?.end_date||''}
 async function saveSeason(){let id=$('seasonEdit').value,body={name:$('seasonName').value.trim(),start_date:$('seasonStart').value,end_date:$('seasonEnd').value};if(!body.name||!body.start_date||!body.end_date)return toast('시즌 이름과 시작·종료일을 입력하세요.');try{await api('/seasons'+(id?'/'+id:''),{method:id?'PUT':'POST',body:JSON.stringify(body)});await loadSeasons();$('seasonEdit').value='';editSeasonForm();await loadRanking();toast('시즌 저장 완료')}catch(e){toast(e.message)}}
 async function removeSeason(){let id=$('seasonEdit').value;if(!id)return toast('삭제할 시즌을 선택하세요.');if(!confirm('시즌을 삭제할까요? 경기 기록은 유지됩니다.'))return;try{await api('/seasons/'+id,{method:'DELETE'});$('rankSeason').value='';$('seasonEdit').value='';await loadSeasons();editSeasonForm();await loadRanking();toast('시즌 삭제 완료')}catch(e){toast(e.message)}}
-async function loadRanking(){try{let min=Math.max(1,Number($('minGames').value)||1),params=new URLSearchParams();if($('rankSeason').value)params.set('season_id',$('rankSeason').value);if($('rankRole').value)params.set('role',$('rankRole').value);let data=(await api('/stats?'+params)).filter(p=>p.total>=min);$('rankTable').innerHTML=data.length?'<table><tr><th>순위</th><th>닉네임</th><th>경기</th><th>승</th><th>패</th><th>승률</th><th>Score</th></tr>'+data.map((p,i)=>`<tr><td>${i+1}</td><td><button onclick="openStats('${encodeURIComponent(p.name)}')">${esc(p.name)}</button></td><td>${p.total}</td><td>${p.wins}</td><td>${p.losses}</td><td>${p.win_rate}%</td><td><strong>${p.score}</strong></td></tr>`).join('')+'</table>':'<p>조건에 해당하는 경기 기록이 없습니다.</p>'}catch(e){toast(e.message)}}
+function rankPosition(i){
+  const rank=i+1;
+  if(rank>3)return String(rank);
+  const color=rank===1?'rank-first':rank===2?'rank-second':'rank-third';
+  const icon=rank===1
+    ?'<path d="m2 8 5 4 5-7 5 7 5-4-2 11H4L2 8Z"/><path d="M4 22h16"/>'
+    :'<circle cx="12" cy="15" r="5"/><path d="m7 11-3-8h5l3 7m5 1 3-8h-5l-3 7"/>';
+  return `<span class="rank-position ${color}">${rank}<svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg></span>`;
+}
+function rankingRoleChips(name){
+  const p=profiles.find(p=>p.name===name);
+  if(!p)return '';
+  const available=Array.isArray(p.available_roles)?p.available_roles:
+    (admin&&p.roles&&typeof p.roles==='object'?roles.filter(r=>Object.hasOwn(p.roles,r)):[]);
+  return `<span class="rank-role-list">${roles.filter(r=>available.includes(r)).map(r=>{
+    const v=roleVisuals[r];
+    return `<span class="role-chip ${v.css}" title="${esc(r)}"><svg viewBox="0 0 24 24" aria-hidden="true">${v.icon}</svg>${v.short}</span>`;
+  }).join('')}</span>`;
+}
+async function loadRanking(){
+  try{
+    let min=Math.max(1,Number($('minGames').value)||1),params=new URLSearchParams();
+    if($('rankSeason').value)params.set('season_id',$('rankSeason').value);
+    if($('rankRole').value)params.set('role',$('rankRole').value);
+    // Public profile data contains available_roles only, never personal tier values.
+    if(!profiles.length)await fetchProfiles();
+    let data=(await api('/stats?'+params)).filter(p=>p.total>=min);
+    $('rankTable').innerHTML=data.length
+      ?'<table><tr><th>순위</th><th>닉네임 / 가능 캐릭터</th><th>경기</th><th>승</th><th>패</th><th>승률</th><th>Score</th></tr>'+
+       data.map((p,i)=>`<tr><td>${rankPosition(i)}</td><td><div class="rank-name-roles"><button onclick="openStats('${encodeURIComponent(p.name)}')">${esc(p.name)}</button>${rankingRoleChips(p.name)}</div></td><td>${p.total}</td><td>${p.wins}</td><td>${p.losses}</td><td>${p.win_rate}%</td><td><strong>${p.score}</strong></td></tr>`).join('')+'</table>'
+      :'<p>조건에 해당하는 경기 기록이 없습니다.</p>';
+  }catch(e){toast(e.message)}
+}
 function openStats(encoded){$('searchName').value=decodeURIComponent(encoded);tab('stats');searchStats()}
 async function editMatch(id,winner){if(!admin)return toast('관리자 로그인이 필요합니다.');if(!confirm(`이 경기의 승리팀을 ${winner}팀으로 변경할까요?`))return;try{await api('/matches/'+encodeURIComponent(id),{method:'PATCH',body:JSON.stringify({winner})});await loadMatches();toast('승리팀 수정 완료. 전적/랭킹에 자동 반영됩니다.')}catch(e){toast(e.message)}}
 async function deleteMatch(id){if(!admin)return toast('관리자 로그인이 필요합니다.');if(!confirm('이 경기 기록을 영구 삭제할까요? 전적/랭킹에서 제외됩니다.'))return;try{await api('/matches/'+encodeURIComponent(id),{method:'DELETE'});await loadMatches();toast('경기 기록 삭제 완료')}catch(e){toast(e.message)}}
