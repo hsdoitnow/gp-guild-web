@@ -11,7 +11,6 @@ from engine import ROLES, TIERS, DEFAULT_SCORES, generate
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
-
 DATABASE_URL=os.getenv('DATABASE_URL','sqlite:///./gp_local.db')
 if DATABASE_URL.startswith('postgres://'): DATABASE_URL=DATABASE_URL.replace('postgres://','postgresql+psycopg://',1)
 if DATABASE_URL.startswith('postgresql://'): DATABASE_URL=DATABASE_URL.replace('postgresql://','postgresql+psycopg://',1)
@@ -173,7 +172,7 @@ def save_scores(body:ScoresIn,request:Request,s:Session=Depends(db)):
     s.commit(); return {'ok':True}
 @app.get('/api/profiles')
 def profiles(s:Session=Depends(db)):
-    return [{'name':p.name} for p in s.scalars(select(Profile).order_by(Profile.name)).all()]
+    return [{'name':p.name, 'available_roles':[r for r in ROLES if r in json.loads(p.roles_json or '{}')]} for p in s.scalars(select(Profile).order_by(Profile.name)).all()]
 # Administrator-only bulk profile editor. Missing cells mean an unavailable role.
 # Names are immutable row identifiers; Excel imports never create/delete profiles.
 class BulkProfilesIn(BaseModel):
@@ -347,7 +346,7 @@ def generate_api(body:GenerateIn,s:Session=Depends(db)):
             s.add(Setting(key='pending:'+generation_id,value=json.dumps(pending,ensure_ascii=False)))
             s.commit()
             result['generation_id']=generation_id
-        return {'mode':result.get('mode'),'participants':[{'name':p['name'],'role':p['role'],'team':p.get('team')} for p in result['participants']], 'generation_id':result.get('generation_id')}
+        return {'mode':result.get('mode'),'participants':[{'name':p['name'],'role':p['role'],'team':p.get('team')} for p in result['participants']], 'generation_id':result.get('generation_id'), 'scores':result.get('scores') if result.get('mode')=='team' else None, 'diff':result.get('diff') if result.get('mode')=='team' else None}
     except ValueError as e: raise HTTPException(422,str(e))
 class ManualMatchIn(BaseModel):
     played_at:datetime
@@ -447,7 +446,7 @@ def matches(limit:int=Query(50,ge=1,le=200),s:Session=Depends(db)):
     parts=s.scalars(select(MatchPlayer).where(MatchPlayer.match_id.in_([m.id for m in ms]))).all()
     grouped={}
     for p in parts: grouped.setdefault(p.match_id,[]).append({'name':p.name,'role':p.role,'team':p.team})
-    return [{'id':m.id,'created_at':m.created_at.isoformat(),'winner':m.winner,'participants':grouped.get(m.id,[])} for m in ms]
+    return [{'id':m.id,'created_at':m.created_at.isoformat(),'winner':m.winner,'score_a':m.score_a,'score_b':m.score_b,'participants':grouped.get(m.id,[])} for m in ms]
 def season_bounds(s:Session,season_id:int|None):
     if season_id is None:return None
     season=s.get(Season,season_id)
