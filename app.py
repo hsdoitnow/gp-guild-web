@@ -520,3 +520,54 @@ def stats(name:str|None=None,season_id:int|None=None,role:str|None=None,s:Sessio
             r['total']=r['wins']+r['losses'];r['win_rate']=round(100*r['wins']/r['total'],1);r['score']=r['wins']*10+r['losses']*2
         result.append(p)
     return sorted(result,key=lambda p:(-p['score'],-p['wins'],-p['win_rate'],p['name']))
+
+
+@app.get('/api/player-analysis')
+def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:int|None=None,s:Session=Depends(db)):
+    """Aggregate full match history; never expose tiers or player points."""
+    from collections import defaultdict
+    name=name.strip()
+    if not name:raise HTTPException(422,'닉네임을 입력하세요.')
+    season=season_bounds(s,season_id)
+    q=select(Match).join(MatchPlayer,MatchPlayer.match_id==Match.id).where(MatchPlayer.name==name)
+    if season:q=q.where(Match.created_at>=season.start_date,Match.created_at<season.end_date)
+    matches=s.scalars(q.order_by(Match.created_at.asc(),Match.id.asc())).all()
+    if not matches:return {'name':name,'total':0,'wins':0,'losses':0,'win_rate':0,'score':0,'by_role':{},'best_streak':0,'worst_streak':0,'current_streak':0,'recent':[],'duos':[],'opponents':[],'best_duo':None,'worst_duo':None,'nemesis':None,'favorite_opponent':None,'min_games':5}
+    parts=s.scalars(select(MatchPlayer).where(MatchPlayer.match_id.in_([m.id for m in matches]))).all()
+    grouped=defaultdict(list)
+    for p in parts:grouped[p.match_id].append(p)
+    duos=defaultdict(lambda:[0,0]);opponents=defaultdict(lambda:[0,0]);by_role=defaultdict(lambda:[0,0])
+    recent=[];wins=0;best_streak=0;worst_streak=0;current=0
+    for m in matches:
+        players=grouped[m.id]
+        me=next((p for p in players if p.name==name),None)
+        if me is None:continue
+        won=me.team==m.winner
+        wins+=int(won)
+        by_role[me.role][0]+=int(won);by_role[me.role][1]+=1
+        current=(max(0,current)+1) if won else (min(0,current)-1)
+        best_streak=max(best_streak,current)
+        worst_streak=max(worst_streak,-current)
+        recent.append({'date':as_utc(m.created_at).isoformat(),'id':m.id,'won':won,'role':me.role})
+        for p in players:
+            if p.name==name:continue
+            target=duos if p.team==me.team else opponents
+            target[p.name][0]+=int(won);target[p.name][1]+=1
+    def summary(items):
+        return [{'name':n,'wins':v[0],'losses':v[1]-v[0],'total':v[1],'win_rate':round(100*v[0]/v[1],1)} for n,v in items.items()]
+    d=summary(duos);o=summary(opponents)
+    qualified_d=[x for x in d if x['total']>=5]
+    qualified_o=[x for x in o if x['total']>=5]
+    d.sort(key=lambda x:(-x['win_rate'],-x['total'],x['name']))
+    o.sort(key=lambda x:(x['win_rate'],-x['total'],x['name']))
+    best_duo=min(qualified_d,key=lambda x:(-x['win_rate'],-x['total'],x['name']),default=None)
+    worst_duo=min(qualified_d,key=lambda x:(x['win_rate'],-x['total'],x['name']),default=None)
+    nemesis=min(qualified_o,key=lambda x:(x['win_rate'],-x['total'],x['name']),default=None)
+    favorite_opponent=min(qualified_o,key=lambda x:(-x['win_rate'],-x['total'],x['name']),default=None)
+    total=len(recent)
+    return {'name':name,'total':total,'wins':wins,'losses':total-wins,'win_rate':round(100*wins/total,1),
+            'score':wins*10+(total-wins)*2,'by_role':{r:{'wins':v[0],'losses':v[1]-v[0],'total':v[1],
+            'win_rate':round(100*v[0]/v[1],1),'score':v[0]*10+(v[1]-v[0])*2} for r,v in by_role.items()},
+            'best_streak':best_streak,'worst_streak':worst_streak,'current_streak':current,
+            'recent':list(reversed(recent[-10:])), 'duos':d,'opponents':o,'best_duo':best_duo,
+            'worst_duo':worst_duo,'nemesis':nemesis,'favorite_opponent':favorite_opponent,'min_games':5}
