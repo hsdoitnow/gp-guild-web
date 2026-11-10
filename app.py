@@ -11,6 +11,7 @@ from engine import ROLES, TIERS, DEFAULT_SCORES, generate
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
+
 DATABASE_URL=os.getenv('DATABASE_URL','sqlite:///./gp_local.db')
 if DATABASE_URL.startswith('postgres://'): DATABASE_URL=DATABASE_URL.replace('postgres://','postgresql+psycopg://',1)
 if DATABASE_URL.startswith('postgresql://'): DATABASE_URL=DATABASE_URL.replace('postgresql://','postgresql+psycopg://',1)
