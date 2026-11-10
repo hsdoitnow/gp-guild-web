@@ -569,7 +569,7 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
     total=len(rows)
     recent10=recent[-10:]
     recent_wins=sum(x['won'] for x in recent10)
-    qualified=[(r,v) for r,v in by_role.items() if v[1]>=5]
+    qualified=[(r,v) for r,v in by_role.items() if v[1]>=1]
     qualified.sort(key=lambda x:(-x[1][0]/x[1][1],-x[1][1],x[0]))
     best_role={'role':qualified[0][0],'total':qualified[0][1][1],
                'win_rate':round(100*qualified[0][1][0]/qualified[0][1][1],1)} if qualified else None
