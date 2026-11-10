@@ -55,6 +55,8 @@
 .analytics-history .win{background:#205b46;color:#b5f4d2}.analytics-history .loss{background:#65353e;color:#ffd0d0}
 .analytics-filter{margin:12px 0}.analytics-filter select{max-width:260px}
 .analytics-grid table{font-size:13px}
+/* Personal analytics additions */
+.analytics-bar-row{margin:10px 0}.analytics-bar-row strong{font-size:13px}.analytics-bar-track{height:9px;background:#3a4860;border-radius:99px;overflow:hidden;margin-top:6px}.analytics-bar-fill{height:100%;background:#79c5f2;border-radius:99px}.analytics-trend{width:100%;height:auto;display:block}.analytics-achievements{display:grid;grid-template-columns:repeat(auto-fit,minmax(115px,1fr));gap:10px;margin-top:14px}.analytics-achievement{display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center;background:#25334b;border:1px solid #3a4b65;border-radius:10px;padding:14px 8px;color:#a9b5ca}.analytics-achievement.earned{color:#f7d58a;border-color:#897046}.analytics-achievement-icon{font-size:24px}.analytics-achievement small{font-size:12px}
 @media(max-width:600px){.analytics-grid{grid-template-columns:1fr}.analytics-metric strong{font-size:20px}.analytics-top{gap:6px}.analytics-metric{padding:12px 4px}}
 </style></head><body><main><h1>⚔️ GP길드 D2R TEAM PK</h1><small>팀 조합 · 전적 조회 · 길드 랭킹</small><nav><button onclick="tab('team')">팀 생성</button><button class="admin-only hidden" onclick="tab('profiles')">프로필 관리</button><button class="admin-only hidden" onclick="tab('overview')">전체 프로필 현황</button><button class="admin-only hidden" onclick="tab('scores')">점수 설정</button><button onclick="tab('stats')">전적 조회</button><button onclick="tab('ranking')">랭킹</button><button onclick="tab('matches')">경기 기록</button><button onclick="tab('admin')" id="adminNav">관리자 로그인</button></nav>
 <section id="admin" class="hidden"><h2>관리자 인증</h2><p class="muted" id="adminState">상태 확인 중...</p><div class="flex"><input id="adminPassword" type="password" autocomplete="current-password" placeholder="관리자 비밀번호" onkeydown="if(event.key==='Enter')adminLogin()"><button onclick="adminLogin()">로그인</button><button onclick="adminLogout()">로그아웃</button></div><p class="muted">로그인 유효시간: 8시간 · 프로필/점수 설정과 경기 기록 수정·삭제는 관리자만 가능합니다.</p></section><section id="team"><div class="flex"><label><input type="radio" name="mode" value="char"> 캐릭만 나누기 (2명씩)</label><label><input type="radio" name="mode" value="team" checked> 팀까지 짜기 (4vs4)</label></div><div class="flex" style="margin:14px 0"><label><input type="checkbox" id="useDiff" checked> 점수차 제한</label><label>허용 점수차 <input type="number" id="diff" min="0" max="20" step="0.5" value="1"></label><label><input type="checkbox" id="rotateTeams" checked> 직전 경기 대비 팀별 최소 2명 변경 (동일 8명)</label><label><input type="checkbox" id="useRecent" checked> 직전 캐릭 제외 + 최근 10경기 균등 배분 우선</label><label>최근 <input type="number" id="recent" min="0" max="5" value="1"> 판</label></div><h3>플레이어 8명</h3><div class="players" id="players"></div><div class="flex" style="margin:16px 0"><button class="primary" onclick="makeTeam()">🎲 조합 생성</button><button onclick="copyResult()">결과 복사 (공지용)</button><span class="pill" id="genCount">생성 횟수: 0</span></div><div id="result" class="result">플레이어를 입력한 후 조합 생성을 눌러주세요.</div><div id="recordBox" class="panel hidden"><h3>경기 결과 등록</h3><p class="muted">실제로 진행한 경기만 저장하세요. 등록 즉시 모든 길드원 전적에 반영됩니다.</p><div class="flex"><button onclick="recordMatch('A')">🏆 A팀 승리 등록</button><button onclick="recordMatch('B')">🏆 B팀 승리 등록</button></div></div></section>
@@ -66,7 +68,7 @@
 <div id="overviewPreview" class="panel hidden"><h3>엑셀 변경사항 미리보기</h3><div id="overviewChanges" class="scroll"></div><button class="primary" onclick="applyExcelOverview()">검증된 변경사항 일괄 적용</button><button onclick="cancelExcelOverview()">취소</button></div>
 </section>
 <section id="scores" class="hidden"><h2>캐릭터별 티어 점수</h2><div id="scoreTable" class="scroll"></div><button class="admin-only hidden" onclick="saveScores()">점수 설정 저장</button><button class="admin-only hidden" onclick="resetScores()">기본값으로 되돌리기</button></section>
-<section id="stats" class="hidden"><h2>닉네임별 전적 조회</h2><div class="flex"><div class="stats-combobox" id="statsCombobox"><input id="searchName" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="statsNameOptions" autocomplete="off" placeholder="닉네임 검색 또는 선택" onfocus="showStatsNames()" oninput="showStatsNames()" onkeydown="statsNameKeydown(event)"><div id="statsNameOptions" class="stats-name-options hidden" role="listbox"></div></div><button onclick="searchStats()">조회</button></div><div class="flex analytics-filter"><label>분석 기간 <select id="statsSeason" onchange="searchStats()"><option value="">전체 기간</option></select></label><span class="muted">천적·듀오 선정 기준: 함께 또는 상대팀으로 최소 5경기</span></div><div id="statsResult"></div></section>
+<section id="stats" class="hidden"><h2>닉네임별 전적 조회</h2><div class="flex"><div class="stats-combobox" id="statsCombobox"><input id="searchName" role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="statsNameOptions" autocomplete="off" placeholder="닉네임 검색 또는 선택" onfocus="showStatsNames()" oninput="showStatsNames()" onkeydown="statsNameKeydown(event)"><div id="statsNameOptions" class="stats-name-options hidden" role="listbox"></div></div></div><div class="flex analytics-filter"><label>분석 기간 <select id="statsSeason" onchange="searchStats()"><option value="">전체 기간</option></select></label><span class="muted">개인 기록 중심 분석 · 다른 플레이어 닉네임 미표시</span></div><div id="statsResult"></div></section>
 <section id="ranking" class="hidden"><h2>길드 랭킹</h2><div class="flex"><label>기간 <select id="rankSeason" onchange="loadRanking()"><option value="">전체 기간</option></select></label><label>캐릭터 <select id="rankRole" onchange="loadRanking()"><option value="">전체 캐릭터</option><option>드루이드</option><option>어쌔</option><option>네크</option><option>슴딘</option></select></label><label>최소 경기 수 <input type="number" id="minGames" min="1" value="1" onchange="loadRanking()"></label></div><p class="muted">Score순 (승리 +10점 / 패배 +2점) · 동점이면 승수 → 승률 → 닉네임 순입니다. 시즌 기간은 한국시간(KST) 기준입니다.</p><div class="scroll" id="rankTable"></div><div class="panel admin-only hidden" id="seasonAdmin"><h3>시즌 관리 (관리자 전용)</h3><div class="flex"><select id="seasonEdit"><option value="">새 시즌 만들기</option></select><input id="seasonName" placeholder="시즌 이름"><label>시작 <input id="seasonStart" type="date"></label><label>종료 <input id="seasonEnd" type="date"></label><button onclick="saveSeason()">시즌 저장</button><button onclick="removeSeason()">선택 시즌 삭제</button></div><p class="muted">시즌을 삭제해도 경기 기록은 삭제되지 않습니다. 시즌 날짜 변경 시 해당 기간의 기존 경기 전적이 자동 집계됩니다. 시즌 기간끼리 겹칠 수 없습니다.</p></div></section>
 <section id="matches" class="hidden"><h2>경기 기록 (최신 50경기)</h2>
 <div class="panel admin-only hidden" id="manualMatchPanel"><h3>누락 경기 수동 등록 (관리자 전용)</h3>
@@ -135,17 +137,19 @@ function showStatsNames(){
  const names=[...new Set(profiles.map(p=>p.name).filter(Boolean))].sort((a,b)=>a.localeCompare(b,'ko-KR'));
  const filtered=names.filter(n=>n.toLocaleLowerCase('ko-KR').includes(query));
  box.innerHTML=filtered.length?filtered.map(n=>`<button type="button" role="option" class="stats-name-option" data-name="${esc(n)}">${esc(n)}</button>`).join(''):'<div class="stats-name-empty">일치하는 닉네임이 없습니다.</div>';
- box.querySelectorAll('.stats-name-option').forEach(btn=>btn.addEventListener('mousedown',e=>{e.preventDefault();input.value=btn.dataset.name;hideStatsNames();input.focus()}));
+ box.querySelectorAll('.stats-name-option').forEach(btn=>btn.addEventListener('mousedown',e=>{e.preventDefault();input.value=btn.dataset.name;hideStatsNames();input.focus();searchStats()}));
  box.classList.remove('hidden');input.setAttribute('aria-expanded','true');
 }
 function hideStatsNames(){$('statsNameOptions').classList.add('hidden');$('searchName').setAttribute('aria-expanded','false')}
 function statsNameKeydown(e){
  if(e.key==='Escape'){hideStatsNames();return}
- if(e.key==='Enter'){e.preventDefault();const first=$('statsNameOptions').querySelector('.stats-name-option');if(!$('statsNameOptions').classList.contains('hidden')&&first&&$('searchName').value.trim()!==first.dataset.name){$('searchName').value=first.dataset.name;hideStatsNames()}else{hideStatsNames();searchStats()}return}
+ if(e.key==='Enter'){e.preventDefault();const first=$('statsNameOptions').querySelector('.stats-name-option');if(!$('statsNameOptions').classList.contains('hidden')&&first){$('searchName').value=first.dataset.name}hideStatsNames();searchStats();return}
  if(e.key==='ArrowDown'){e.preventDefault();showStatsNames();$('statsNameOptions').querySelector('.stats-name-option')?.focus()}
 }
 document.addEventListener('click',e=>{if(!e.target.closest('#statsCombobox'))hideStatsNames()});
+let statsRequestId=0;
 async function searchStats(){
+ const requestId=++statsRequestId;
  try{
   const name=$('searchName').value.trim();
   if(!name)return toast('닉네임을 선택하세요.');
@@ -155,34 +159,41 @@ async function searchStats(){
   const params=new URLSearchParams({name});
   if($('statsSeason').value)params.set('season_id',$('statsSeason').value);
   const data=await api('/player-analysis?'+params.toString());
+  if(requestId!==statsRequestId)return;
   $('statsResult').innerHTML=playerAnalytics(data);
- }catch(e){$('statsResult').innerHTML='';toast(e.message)}
+ }catch(e){if(requestId!==statsRequestId)return;$('statsResult').innerHTML='';toast(e.message)}
 }
 function playerAnalytics(p){
  if(!p.total)return '<div class="panel"><p class="muted">선택한 기간에 등록된 경기 기록이 없습니다.</p></div>';
- const pct=n=>Number(n).toFixed(1)+'%';
+ const pct=n=>Number(n||0).toFixed(1)+'%';
  const metric=(v,l)=>`<div class="analytics-metric"><strong>${esc(String(v))}</strong><span>${l}</span></div>`;
- const record=x=>x?`<div class="analytics-name">${esc(x.name)}</div><div class="analytics-detail">${x.total}경기 · ${x.wins}승 ${x.losses}패 · 승률 ${pct(x.win_rate)}</div>`:'<div class="analytics-detail">조건을 충족하는 플레이어가 없습니다.</div>';
- const box=(title,x,kind)=>`<div class="analytics-box"><h4>${title}</h4>${record(x)}${x?`<div class="analytics-detail ${kind}">${pct(x.win_rate)}</div>`:''}</div>`;
- const rankTable=(rows,empty)=>!rows.length?`<p class="muted">${empty}</p>`:
- `<div class="scroll"><table><tr><th>닉네임</th><th>경기</th><th>승</th><th>패</th><th>승률</th></tr>${rows.map(x=>`<tr><td>${esc(x.name)}</td><td>${x.total}</td><td>${x.wins}</td><td>${x.losses}</td><td>${pct(x.win_rate)}</td></tr>`).join('')}</table></div>`;
- const duoSorted=p.duos.filter(x=>x.total>=p.min_games).sort((a,b)=>b.win_rate-a.win_rate||b.total-a.total||a.name.localeCompare(b.name,'ko'));
- const opponentSorted=p.opponents.filter(x=>x.total>=p.min_games).sort((a,b)=>a.win_rate-b.win_rate||b.total-a.total||a.name.localeCompare(b.name,'ko'));
- const recent=p.recent.map(m=>`<span class="${m.won?'win':'loss'}" title="${esc(new Date(m.date).toLocaleString('ko-KR'))} · ${esc(m.role)}">${m.won?'승':'패'}</span>`).join('');
+ const r=p.recent||[], recentRate=p.recent_win_rate||0, diff=recentRate-p.win_rate;
+ const streak=p.current_streak>0?p.current_streak+'연승':p.current_streak<0?(-p.current_streak)+'연패':'없음';
+ const recent=r.map(m=>`<span class="${m.won?'win':'loss'}" title="${esc(new Date(m.date).toLocaleString('ko-KR'))} · ${esc(m.role)}">${m.won?'승':'패'}</span>`).join('');
+ const roleRows=roles.map(role=>{const x=p.by_role[role]||{total:0,wins:0,losses:0,win_rate:0,score:0};return `<tr><td>${esc(role)}</td><td>${x.total}</td><td>${x.wins}</td><td>${x.losses}</td><td>${x.total?pct(x.win_rate):'-'}</td><td>${x.score}</td></tr>`}).join('');
+ const roleBars=roles.map(role=>{const x=p.by_role[role]||{total:0,wins:0,losses:0,win_rate:0};return `<div class="analytics-bar-row"><div class="flex space"><span>${esc(role)} <small>${x.total}경기 · ${x.wins}승 ${x.losses}패</small></span><strong>${x.total?pct(x.win_rate):'-'}</strong></div><div class="analytics-bar-track"><div class="analytics-bar-fill" style="width:${Math.max(0,Math.min(100,x.win_rate))}%"></div></div></div>`}).join('');
+ const months=p.monthly||[];
+ const monthlyBars=months.length?months.map(x=>`<div class="analytics-bar-row"><div class="flex space"><span>${esc(x.month)} <small>${x.total}경기</small></span><strong>${pct(x.win_rate)}</strong></div><div class="analytics-bar-track"><div class="analytics-bar-fill" style="width:${Math.max(0,Math.min(100,x.win_rate))}%"></div></div></div>`).join(''):'<p class="muted">월별 데이터가 없습니다.</p>';
+ const trend=p.score_trend||[];
+ const sampled=trend.length>100?trend.filter((_,i)=>i%Math.ceil(trend.length/100)===0||i===trend.length-1):trend;
+ const maxScore=Math.max(1,p.score);
+ const points=sampled.map(x=>`${(20+(x.game-1)/Math.max(1,p.total-1)*570).toFixed(1)},${(128-x.score/maxScore*110).toFixed(1)}`).join(' ');
+ const chart=trend.length?`<svg viewBox="0 0 610 155" class="analytics-trend" role="img" aria-label="경기별 누적 점수 추이"><line x1="20" y1="128" x2="590" y2="128" stroke="#566680"/><line x1="20" y1="18" x2="590" y2="18" stroke="#35465e" stroke-dasharray="4 5"/><polyline fill="none" stroke="#79c5f2" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${points}"/><text x="20" y="148" fill="#a9b5ca" font-size="12">1경기</text><text x="590" y="148" text-anchor="end" fill="#a9b5ca" font-size="12">${p.total}경기 · ${p.score}점</text></svg>`:'';
+ const achievements=(p.achievements||[]).map(a=>`<div class="analytics-achievement ${a.achieved?'earned':''}"><div class="analytics-achievement-icon">${a.achieved?'🏅':'🔒'}</div><strong>${esc(a.title)}</strong><small>${a.achieved?'달성':a.progress+' / '+a.target}</small></div>`).join('');
  return `<div class="panel"><h3>⚔️ ${esc(p.name)} · PLAYER ANALYTICS</h3>
  <div class="analytics-top">${metric(p.total,'총 경기')}${metric(p.wins,'승리')}${metric(p.losses,'패배')}${metric(pct(p.win_rate),'승률')}${metric(p.score,'Score')}${metric(p.best_streak+'연승','최다 연승')}</div>
  <div class="analytics-grid">
- ${box('⚔️ 나의 천적',p.nemesis,'analytics-negative')}
- ${box('🎯 상대하기 편한 플레이어',p.favorite_opponent,'analytics-positive')}
- ${box('🤝 BEST 듀오',p.best_duo,'analytics-positive')}
- ${box('📉 궁합 개선 필요 듀오',p.worst_duo,'analytics-neutral')}
- <div class="analytics-box"><h4>🔥 최다 연승 / 최다 연패</h4><div class="analytics-name analytics-positive">${p.best_streak}연승</div><div class="analytics-detail">최다 연승</div><div class="analytics-name analytics-negative" style="margin-top:12px">${p.worst_streak}연패</div><div class="analytics-detail">최다 연패</div><div class="analytics-detail">현재 ${p.current_streak>0?p.current_streak+'연승':p.current_streak<0?(-p.current_streak)+'연패':'-'}</div></div>
- <div class="analytics-box"><h4>📅 최근 10경기</h4><div class="analytics-name">${p.recent.filter(x=>x.won).length}승 ${p.recent.filter(x=>!x.won).length}패</div><div class="analytics-detail">최신 경기 → 과거 경기 (왼쪽부터)</div><div class="analytics-history">${recent}</div></div>
+ <div class="analytics-box"><h4>📅 최근 10경기</h4><div class="analytics-name">${p.recent_wins}승 ${r.length-p.recent_wins}패 · ${pct(recentRate)}</div><div class="analytics-detail">최신 → 과거 순서</div><div class="analytics-history">${recent}</div></div>
+ <div class="analytics-box"><h4>📈 최근 경기력 변화</h4><div class="analytics-name ${diff>=0?'analytics-positive':'analytics-negative'}">${diff>0?'+':''}${diff.toFixed(1)}%p</div><div class="analytics-detail">최근 ${r.length}경기 ${pct(recentRate)} / 전체 ${pct(p.win_rate)}</div><div class="analytics-detail">전체 승률 대비 최근 승률 차이</div></div>
+ <div class="analytics-box"><h4>🔥 연승 / 연패 기록</h4><div class="analytics-name analytics-positive">${p.best_streak}연승 <span class="analytics-detail">최다 연승</span></div><div class="analytics-name analytics-negative" style="margin-top:12px">${p.worst_streak}연패 <span class="analytics-detail">최다 연패</span></div><div class="analytics-detail">현재 흐름: ${streak}</div></div>
+ <div class="analytics-box"><h4>🏆 최고 승률 캐릭터</h4><div class="analytics-name">${p.best_role?esc(p.best_role.role):'기록 부족'}</div><div class="analytics-detail">${p.best_role?pct(p.best_role.win_rate)+' · '+p.best_role.total+'경기':'캐릭터별 최소 5경기 이상 필요'}</div></div>
+ <div class="analytics-box"><h4>🗓️ 최다 활동 월</h4><div class="analytics-name">${p.busiest_month?esc(p.busiest_month.month):'-'}</div><div class="analytics-detail">${p.busiest_month?p.busiest_month.total+'경기 · '+p.busiest_month.wins+'승 '+p.busiest_month.losses+'패':'기록 없음'}</div></div>
+ <div class="analytics-box"><h4>🎮 캐릭터별 승률</h4>${roleBars}</div>
  </div>
- <div class="analytics-section"><h3>🎮 캐릭터별 성적</h3><div class="scroll"><table><tr><th>캐릭터</th><th>경기</th><th>승</th><th>패</th><th>승률</th><th>Score</th></tr>${roles.map(r=>{const s=p.by_role[r]||{total:0,wins:0,losses:0,win_rate:0,score:0};return `<tr><td>${esc(r)}</td><td>${s.total}</td><td>${s.wins}</td><td>${s.losses}</td><td>${s.total?pct(s.win_rate):'-'}</td><td>${s.score}</td></tr>`}).join('')}</table></div></div>
- <div class="analytics-grid"><div class="analytics-box"><h4>🏆 듀오 상세 랭킹 (승률 높은 순)</h4>${rankTable(duoSorted,'5경기 이상 함께한 플레이어가 없습니다.')}</div>
- <div class="analytics-box"><h4>⚔️ 상대 전적 / 천적 랭킹 (내 승률 낮은 순)</h4>${rankTable(opponentSorted,'5경기 이상 상대했던 플레이어가 없습니다.')}</div></div>
- <p class="muted">동률이면 경기 수가 많은 플레이어를 우선합니다. 모든 기록은 선택한 기간의 실제 경기 데이터를 기준으로 계산합니다.</p></div>`;
+ <div class="analytics-section"><h3>🎮 캐릭터별 상세 전적</h3><div class="scroll"><table><tr><th>캐릭터</th><th>경기</th><th>승</th><th>패</th><th>승률</th><th>Score</th></tr>${roleRows}</table></div></div>
+ <div class="analytics-grid"><div class="analytics-box"><h4>📊 월별 승률 추이</h4>${monthlyBars}</div><div class="analytics-box"><h4>📈 누적 Score 추이</h4>${chart}<p class="muted">경기 순서 기준 · 승리 +10점 / 패배 +2점</p></div></div>
+ <div class="analytics-section"><h3>🏅 개인 업적</h3><div class="analytics-achievements">${achievements}</div></div>
+ <p class="muted">모든 통계와 업적은 선택한 분석 기간의 경기 기록을 기준으로 계산합니다. 다른 플레이어와의 비교 정보는 표시하지 않습니다.</p></div>`;
 }
 
 let seasons=[];
