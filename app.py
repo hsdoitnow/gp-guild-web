@@ -542,6 +542,7 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
     rows=s.execute(q.order_by(Match.created_at.asc(),Match.id.asc())).all()
     by_role=defaultdict(lambda:[0,0]);monthly=defaultdict(lambda:[0,0]);recent=[];wins=0
     best_streak=worst_streak=current=0;running_score=0;score_trend=[]
+    cumulative_by_role=defaultdict(lambda:[0,0]); win_rate_trend={"전체":[]}; win_rate_trend.update({r:[] for r in ROLES})
     winning_roles=set()
     for match,role,team in rows:
         won=(team==match.winner)
@@ -554,6 +555,14 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
         best_streak=max(best_streak,current);worst_streak=max(worst_streak,-current)
         running_score+=10 if won else 2
         score_trend.append({'game':len(score_trend)+1,'score':running_score})
+        game_number=len(score_trend)
+        win_rate_trend['전체'].append({'game':game_number,'date':as_utc(match.created_at).isoformat(),
+            'total':game_number,'wins':wins,'losses':game_number-wins,'win_rate':round(100*wins/game_number,2)})
+        role_stat=cumulative_by_role[role]
+        role_stat[0]+=int(won);role_stat[1]+=1
+        win_rate_trend[role].append({'game':role_stat[1],'date':as_utc(match.created_at).isoformat(),
+            'total':role_stat[1],'wins':role_stat[0],'losses':role_stat[1]-role_stat[0],
+            'win_rate':round(100*role_stat[0]/role_stat[1],2)})
         recent.append({'date':as_utc(match.created_at).isoformat(),'won':won,'role':role})
     total=len(rows)
     recent10=recent[-10:]
@@ -581,4 +590,4 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
             'recent':list(reversed(recent10)),'recent_wins':recent_wins,
             'recent_win_rate':round(100*recent_wins/len(recent10),1) if recent10 else 0,
             'best_role':best_role,'monthly':monthly_data,'busiest_month':busiest,
-            'score_trend':score_trend,'achievements':achievements}
+            'score_trend':score_trend,'win_rate_trend':win_rate_trend,'achievements':achievements}
