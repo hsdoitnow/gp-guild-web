@@ -524,50 +524,53 @@ def stats(name:str|None=None,season_id:int|None=None,role:str|None=None,s:Sessio
 
 @app.get('/api/player-analysis')
 def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:int|None=None,s:Session=Depends(db)):
-    """Aggregate full match history; never expose tiers or player points."""
+    """Personal-only match analytics; no other player names or private tier data."""
     from collections import defaultdict
     name=name.strip()
     if not name:raise HTTPException(422,'닉네임을 입력하세요.')
     season=season_bounds(s,season_id)
-    q=select(Match).join(MatchPlayer,MatchPlayer.match_id==Match.id).where(MatchPlayer.name==name)
+    q=select(Match, MatchPlayer.role, MatchPlayer.team).join(MatchPlayer,MatchPlayer.match_id==Match.id).where(MatchPlayer.name==name)
     if season:q=q.where(Match.created_at>=season.start_date,Match.created_at<season.end_date)
-    matches=s.scalars(q.order_by(Match.created_at.asc(),Match.id.asc())).all()
-    if not matches:return {'name':name,'total':0,'wins':0,'losses':0,'win_rate':0,'score':0,'by_role':{},'best_streak':0,'worst_streak':0,'current_streak':0,'recent':[],'duos':[],'opponents':[],'best_duo':None,'worst_duo':None,'nemesis':None,'favorite_opponent':None,'min_games':5}
-    parts=s.scalars(select(MatchPlayer).where(MatchPlayer.match_id.in_([m.id for m in matches]))).all()
-    grouped=defaultdict(list)
-    for p in parts:grouped[p.match_id].append(p)
-    duos=defaultdict(lambda:[0,0]);opponents=defaultdict(lambda:[0,0]);by_role=defaultdict(lambda:[0,0])
-    recent=[];wins=0;best_streak=0;worst_streak=0;current=0
-    for m in matches:
-        players=grouped[m.id]
-        me=next((p for p in players if p.name==name),None)
-        if me is None:continue
-        won=me.team==m.winner
+    rows=s.execute(q.order_by(Match.created_at.asc(),Match.id.asc())).all()
+    by_role=defaultdict(lambda:[0,0]);monthly=defaultdict(lambda:[0,0]);recent=[];wins=0
+    best_streak=worst_streak=current=0;running_score=0;score_trend=[]
+    winning_roles=set()
+    for match,role,team in rows:
+        won=(team==match.winner)
         wins+=int(won)
-        by_role[me.role][0]+=int(won);by_role[me.role][1]+=1
-        current=(max(0,current)+1) if won else (min(0,current)-1)
-        best_streak=max(best_streak,current)
-        worst_streak=max(worst_streak,-current)
-        recent.append({'date':as_utc(m.created_at).isoformat(),'id':m.id,'won':won,'role':me.role})
-        for p in players:
-            if p.name==name:continue
-            target=duos if p.team==me.team else opponents
-            target[p.name][0]+=int(won);target[p.name][1]+=1
-    def summary(items):
-        return [{'name':n,'wins':v[0],'losses':v[1]-v[0],'total':v[1],'win_rate':round(100*v[0]/v[1],1)} for n,v in items.items()]
-    d=summary(duos);o=summary(opponents)
-    qualified_d=[x for x in d if x['total']>=5]
-    qualified_o=[x for x in o if x['total']>=5]
-    d.sort(key=lambda x:(-x['win_rate'],-x['total'],x['name']))
-    o.sort(key=lambda x:(x['win_rate'],-x['total'],x['name']))
-    best_duo=min(qualified_d,key=lambda x:(-x['win_rate'],-x['total'],x['name']),default=None)
-    worst_duo=min(qualified_d,key=lambda x:(x['win_rate'],-x['total'],x['name']),default=None)
-    nemesis=min(qualified_o,key=lambda x:(x['win_rate'],-x['total'],x['name']),default=None)
-    favorite_opponent=min(qualified_o,key=lambda x:(-x['win_rate'],-x['total'],x['name']),default=None)
-    total=len(recent)
-    return {'name':name,'total':total,'wins':wins,'losses':total-wins,'win_rate':round(100*wins/total,1),
-            'score':wins*10+(total-wins)*2,'by_role':{r:{'wins':v[0],'losses':v[1]-v[0],'total':v[1],
+        by_role[role][0]+=int(won);by_role[role][1]+=1
+        if won:winning_roles.add(role)
+        month=as_utc(match.created_at).astimezone(timezone(timedelta(hours=9))).strftime('%Y-%m')
+        monthly[month][0]+=int(won);monthly[month][1]+=1
+        current=max(0,current)+1 if won else min(0,current)-1
+        best_streak=max(best_streak,current);worst_streak=max(worst_streak,-current)
+        running_score+=10 if won else 2
+        score_trend.append({'game':len(score_trend)+1,'score':running_score})
+        recent.append({'date':as_utc(match.created_at).isoformat(),'won':won,'role':role})
+    total=len(rows)
+    recent10=recent[-10:]
+    recent_wins=sum(x['won'] for x in recent10)
+    qualified=[(r,v) for r,v in by_role.items() if v[1]>=5]
+    qualified.sort(key=lambda x:(-x[1][0]/x[1][1],-x[1][1],x[0]))
+    best_role={'role':qualified[0][0],'total':qualified[0][1][1],
+               'win_rate':round(100*qualified[0][1][0]/qualified[0][1][1],1)} if qualified else None
+    monthly_data=[{'month':k,'wins':v[0],'losses':v[1]-v[0],'total':v[1],
+                   'win_rate':round(100*v[0]/v[1],1)} for k,v in sorted(monthly.items())]
+    busiest=max(monthly_data,key=lambda x:(x['total'],-int(x['month'].replace('-',''))),default=None)
+    achievements=[{'title':'첫 승리','achieved':wins>=1,'progress':min(wins,1),'target':1},
+                  {'title':'5연승','achieved':best_streak>=5,'progress':min(best_streak,5),'target':5},
+                  {'title':'10승','achieved':wins>=10,'progress':min(wins,10),'target':10},
+                  {'title':'50승','achieved':wins>=50,'progress':min(wins,50),'target':50},
+                  {'title':'100승','achieved':wins>=100,'progress':min(wins,100),'target':100},
+                  {'title':'100경기','achieved':total>=100,'progress':min(total,100),'target':100},
+                  {'title':'4캐릭터 승리','achieved':all(r in winning_roles for r in ROLES),
+                   'progress':sum(r in winning_roles for r in ROLES),'target':4}]
+    return {'name':name,'total':total,'wins':wins,'losses':total-wins,
+            'win_rate':round(100*wins/total,1) if total else 0,'score':running_score,
+            'by_role':{r:{'wins':v[0],'losses':v[1]-v[0],'total':v[1],
             'win_rate':round(100*v[0]/v[1],1),'score':v[0]*10+(v[1]-v[0])*2} for r,v in by_role.items()},
             'best_streak':best_streak,'worst_streak':worst_streak,'current_streak':current,
-            'recent':list(reversed(recent[-10:])), 'duos':d,'opponents':o,'best_duo':best_duo,
-            'worst_duo':worst_duo,'nemesis':nemesis,'favorite_opponent':favorite_opponent,'min_games':5}
+            'recent':list(reversed(recent10)),'recent_wins':recent_wins,
+            'recent_win_rate':round(100*recent_wins/len(recent10),1) if recent10 else 0,
+            'best_role':best_role,'monthly':monthly_data,'busiest_month':busiest,
+            'score_trend':score_trend,'achievements':achievements}
