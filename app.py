@@ -1,13 +1,15 @@
-import os, json, uuid, time, hmac, hashlib, base64, secrets, logging
+import os, json, uuid, time, hmac, hashlib, base64, secrets, logging, io
 from datetime import datetime, timezone, date, time as dt_time, timedelta
 from pathlib import Path
-from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Depends, HTTPException, Query, Request, Response, UploadFile, File
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy import create_engine, Column, Integer, Float, String, DateTime, ForeignKey, Text, select, func, UniqueConstraint, text
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
 from engine import ROLES, TIERS, DEFAULT_SCORES, generate
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment
 
 DATABASE_URL=os.getenv('DATABASE_URL','sqlite:///./gp_local.db')
 if DATABASE_URL.startswith('postgres://'): DATABASE_URL=DATABASE_URL.replace('postgres://','postgresql+psycopg://',1)
@@ -125,7 +127,7 @@ class ProfileIn(BaseModel):
     name:str=Field(min_length=1,max_length=100)
     roles:dict[str,str]
 class GenerateIn(BaseModel):
-    players:list[ProfileIn]
+    players:list[str]
     mode:str='team'
     use_diff:bool=True
     rotate_teams:bool=True
@@ -133,9 +135,8 @@ class GenerateIn(BaseModel):
     use_recent:bool=True
     recent_n:int=Field(default=1,ge=0,le=5)
 class RecordIn(BaseModel):
-    participants:list[dict]
+    generation_id:str
     winner:str
-    scores:dict|None=None
 class SeasonIn(BaseModel):
     name:str=Field(min_length=1,max_length=100)
     start_date:date
@@ -171,7 +172,101 @@ def save_scores(body:ScoresIn,request:Request,s:Session=Depends(db)):
     s.commit(); return {'ok':True}
 @app.get('/api/profiles')
 def profiles(s:Session=Depends(db)):
-    return [{'name':p.name,'roles':json.loads(p.roles_json)} for p in s.scalars(select(Profile).order_by(Profile.name)).all()]
+    return [{'name':p.name} for p in s.scalars(select(Profile).order_by(Profile.name)).all()]
+# Administrator-only bulk profile editor. Missing cells mean an unavailable role.
+# Names are immutable row identifiers; Excel imports never create/delete profiles.
+class BulkProfilesIn(BaseModel):
+    profiles:list[ProfileIn]
+    expected:dict[str,dict[str,str]]
+
+def profile_snapshot(s):
+    return {p.name:json.loads(p.roles_json) for p in s.scalars(select(Profile).order_by(Profile.name)).all()}
+
+def check_bulk(current, proposed, expected):
+    if len(proposed)>2000 or len(proposed)!=len(set(proposed)):
+        raise HTTPException(422,'프로필 중복 또는 최대 인원(2000명) 초과')
+    if set(proposed)!=set(current) or set(expected)!=set(current):
+        raise HTTPException(409,'프로필 명단이 변경되었습니다. 최신 목록을 다시 다운로드/조회하세요.')
+    for name, roles in proposed.items():
+        if not name.strip() or len(name)>100:raise HTTPException(422,'닉네임 오류')
+        validate_roles(roles)
+    if expected!=current:
+        raise HTTPException(409,'다른 관리자가 프로필을 변경했습니다. 새로고침 후 다시 시도하세요.')
+    return [{'name':name,'role':role,'before':current[name].get(role),'after':proposed[name].get(role)}
+            for name in sorted(current) for role in ROLES if current[name].get(role)!=proposed[name].get(role)]
+
+@app.get('/api/admin/profiles-overview')
+def admin_profiles_overview(request:Request,s:Session=Depends(db)):
+    require_admin(request)
+    return [{'name':name,'roles':roles} for name,roles in profile_snapshot(s).items()]
+
+@app.put('/api/admin/profiles-overview')
+def admin_profiles_save(body:BulkProfilesIn,request:Request,s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
+    current=profile_snapshot(s)
+    proposed={p.name:p.roles for p in body.profiles}
+    changes=check_bulk(current,proposed,body.expected)
+    for name in {x['name'] for x in changes}:
+        s.get(Profile,name).roles_json=json.dumps(proposed[name],ensure_ascii=False)
+    s.commit()
+    return {'ok':True,'changed':len(changes)}
+
+@app.get('/api/admin/profiles-excel')
+def admin_profiles_excel(request:Request,s:Session=Depends(db)):
+    require_admin(request)
+    current=profile_snapshot(s)
+    wb=Workbook();ws=wb.active;ws.title='프로필'
+    ws.append(['닉네임',*ROLES]);ws.freeze_panes='B2';ws.auto_filter.ref=f'A1:E{len(current)+1}'
+    for name, rolemap in current.items():ws.append([name,*[rolemap.get(role,'') for role in ROLES]])
+    for cell in ws[1]:cell.font=Font(bold=True,color='FFFFFF');cell.fill=PatternFill('solid',fgColor='244C83')
+    ws.column_dimensions['A'].width=24
+    for col in 'BCDE':ws.column_dimensions[col].width=19
+    from openpyxl.worksheet.datavalidation import DataValidation
+    dv=DataValidation(type='list',formula1='"'+','.join(TIERS)+'"',allow_blank=True)
+    dv.error='허용된 티어를 선택하세요.';dv.showErrorMessage=True;ws.add_data_validation(dv);dv.add('B2:E2001')
+    ws2=wb.create_sheet('_snapshot');ws2.sheet_state='veryHidden'
+    ws2.append(['닉네임',*ROLES])
+    for name, rolemap in current.items():ws2.append([name,*[rolemap.get(role,'') for role in ROLES]])
+    out=io.BytesIO();wb.save(out);out.seek(0)
+    return StreamingResponse(out,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',headers={'Content-Disposition':'attachment; filename="gp_profiles.xlsx"','Cache-Control':'no-store'})
+
+def parse_excel(data):
+    try:wb=load_workbook(io.BytesIO(data),read_only=True,data_only=True)
+    except Exception:raise HTTPException(422,'올바른 XLSX 파일이 아닙니다.')
+    try:
+        if '프로필' not in wb.sheetnames or '_snapshot' not in wb.sheetnames:raise HTTPException(422,'홈페이지에서 다운로드한 원본 XLSX를 사용하세요.')
+        def parse_sheet(ws):
+            rows=ws.iter_rows(values_only=True)
+            header=next(rows,None)
+            if not header or tuple(header[:5])!=('닉네임',*ROLES):raise HTTPException(422,'엑셀 열 제목이 변경되었습니다.')
+            output={}
+            for idx,row in enumerate(rows,start=2):
+                if idx>2001:raise HTTPException(422,'최대 2000명까지 허용합니다.')
+                if not row or all(v is None for v in row):continue
+                name=row[0]
+                if not isinstance(name,str) or not name.strip() or name!=name.strip() or len(name)>100 or name in output:
+                    raise HTTPException(422,f'{idx}행: 닉네임 오류 또는 중복')
+                rolemap={}
+                for i,role in enumerate(ROLES,start=1):
+                    value=row[i] if i<len(row) else None
+                    if value is None or value=='':continue
+                    if not isinstance(value,str) or value not in TIERS:raise HTTPException(422,f'{idx}행 {role}: 잘못된 티어')
+                    rolemap[role]=value
+                output[name]=rolemap
+            return output
+        return parse_sheet(wb['프로필']),parse_sheet(wb['_snapshot'])
+    finally:wb.close()
+
+@app.post('/api/admin/profiles-excel/preview')
+async def admin_profiles_excel_preview(request:Request,file:UploadFile=File(...),s:Session=Depends(db)):
+    same_origin(request);require_admin(request)
+    if not file.filename or not file.filename.lower().endswith('.xlsx'):raise HTTPException(422,'XLSX 파일만 업로드하세요.')
+    data=await file.read(2_000_001)
+    if len(data)>2_000_000:raise HTTPException(413,'엑셀 파일은 2MB 이하만 허용합니다.')
+    proposed,expected=parse_excel(data)
+    changes=check_bulk(profile_snapshot(s),proposed,expected)
+    return {'changes':changes,'profiles':[{'name':n,'roles':r} for n,r in proposed.items()],'expected':expected}
+
 @app.put('/api/profiles')
 def upsert_profile(body:ProfileIn,request:Request,s:Session=Depends(db)):
     same_origin(request);require_admin(request)
@@ -203,15 +298,18 @@ def import_profiles(data:dict[str,dict],request:Request,s:Session=Depends(db)):
     s.commit();return {'ok':True,'count':len(data)}
 @app.post('/api/generate')
 def generate_api(body:GenerateIn,s:Session=Depends(db)):
-    if len(body.players)!=8: raise HTTPException(422,'8명을 입력하세요.')
-    for p in body.players: validate_roles(p.roles)
+    names=[name.strip() for name in body.players]
+    if len(names)!=8 or any(not n or len(n)>100 for n in names) or len(set(names))!=8: raise HTTPException(422,'중복 없는 8명의 닉네임을 입력하세요.')
+    saved=profile_snapshot(s)
+    if any(n not in saved for n in names): raise HTTPException(422,'등록되지 않은 프로필이 있습니다. 관리자에게 등록을 요청하세요.')
+    players=[{'name':n,'roles':saved[n]} for n in names]
     # Only finalized games affect recent-character exclusion.
-    rows=s.execute(select(MatchPlayer.name,MatchPlayer.role,Match.created_at,Match.id).join(Match,Match.id==MatchPlayer.match_id).where(MatchPlayer.name.in_([p.name.strip() for p in body.players])).order_by(Match.created_at.desc(),Match.id.desc()).limit(400)).all()
+    rows=s.execute(select(MatchPlayer.name,MatchPlayer.role,Match.created_at,Match.id).join(Match,Match.id==MatchPlayer.match_id).where(MatchPlayer.name.in_(names)).order_by(Match.created_at.desc(),Match.id.desc()).limit(400)).all()
     games={}
     for name,role,created,mid in rows: games.setdefault(mid,{})[name]=role
     history=list(reversed(list(games.values())))
     # Fetch each player’s own last 10 games (not the last 10 guild games).
-    role_history={name:[] for name in [p.name.strip() for p in body.players]}
+    role_history={name:[] for name in names}
     recent_exclusion_roles={}
     cutoff=datetime.now(timezone.utc)-timedelta(hours=12)
     for name in role_history:
@@ -237,10 +335,18 @@ def generate_api(body:GenerateIn,s:Session=Depends(db)):
         latest=s.scalar(select(Match).order_by(Match.created_at.desc(),Match.id.desc()).limit(1))
         if latest:
             members=s.scalars(select(MatchPlayer).where(MatchPlayer.match_id==latest.id)).all()
-            if len(members)==8 and {p.name for p in members}=={p.name.strip() for p in body.players}:
+            if len(members)==8 and {p.name for p in members}==set(names):
                 previous_teams={t:{p.name for p in members if p.team==t} for t in ('A','B')}
     try:
-        return generate([p.model_dump() for p in body.players],body.mode,scores_from_db(s),body.diff_limit,body.use_diff,body.recent_n if body.use_recent else 0,history,previous_teams,role_history=role_history,recent_exclusion_roles=recent_exclusion_roles)
+        result=generate(players,body.mode,scores_from_db(s),body.diff_limit,body.use_diff,body.recent_n if body.use_recent else 0,history,previous_teams,role_history=role_history,recent_exclusion_roles=recent_exclusion_roles)
+        # Never expose tiers, player scores or team totals to a public client.
+        if result.get('mode')=='team':
+            generation_id=str(uuid.uuid4())
+            pending={'expires':time.time()+1800,'participants':result['participants'],'scores':result.get('scores',{})}
+            s.add(Setting(key='pending:'+generation_id,value=json.dumps(pending,ensure_ascii=False)))
+            s.commit()
+            result['generation_id']=generation_id
+        return {'mode':result.get('mode'),'participants':[{'name':p['name'],'role':p['role'],'team':p.get('team')} for p in result['participants']], 'generation_id':result.get('generation_id')}
     except ValueError as e: raise HTTPException(422,str(e))
 class ManualMatchIn(BaseModel):
     played_at:datetime
@@ -291,20 +397,28 @@ def record_manual(body:ManualMatchIn,request:Request,s:Session=Depends(db)):
     return {'ok':True,'id':mid}
 
 @app.post('/api/matches')
-def record(body:RecordIn,s:Session=Depends(db)):
+def record(body:RecordIn,request:Request,s:Session=Depends(db)):
+    same_origin(request)
     if body.winner not in ('A','B'): raise HTTPException(422,'승리팀은 A 또는 B입니다.')
-    if len(body.participants)!=8: raise HTTPException(422,'8명의 참가자가 필요합니다.')
-    names=set(); team_roles={'A':set(),'B':set()}; teams={'A':0,'B':0}
-    for p in body.participants:
-        name=p.get('name');role=p.get('role');tier=p.get('tier');team=p.get('team');points=p.get('points')
-        if not isinstance(name,str) or not name.strip() or len(name)>100 or name in names or role not in ROLES or tier not in TIERS or team not in teams or type(points) not in (int,float) or not 0<=points<=99: raise HTTPException(422,'참가자 정보가 올바르지 않습니다.')
-        if role in team_roles[team]: raise HTTPException(422,'팀별 캐릭터가 중복되었습니다.')
-        names.add(name);team_roles[team].add(role);teams[team]+=1
-    if teams!={'A':4,'B':4} or any(team_roles[t]!=set(ROLES) for t in teams): raise HTTPException(422,'각 팀에 캐릭터별 1명씩 있어야 합니다.')
-    mid=str(uuid.uuid4());scores=body.scores or {}
+    try: uuid.UUID(body.generation_id)
+    except (ValueError,TypeError): raise HTTPException(422,'팀 생성 ID가 올바르지 않습니다.')
+    key='pending:'+body.generation_id
+    # Lock pending row to prevent double submissions on PostgreSQL.
+    pending_row=s.execute(select(Setting).where(Setting.key==key).with_for_update()).scalar_one_or_none()
+    if not pending_row: raise HTTPException(409,'팀 생성 결과가 만료되었거나 이미 기록되었습니다.')
+    payload=json.loads(pending_row.value)
+    if payload['expires']<time.time():
+        s.delete(pending_row);s.commit()
+        raise HTTPException(409,'팀 생성 후 30분이 지났습니다. 다시 생성하세요.')
+    participants=payload['participants']
+    mid=str(uuid.uuid4())
+    scores=payload['scores']
     s.add(Match(id=mid,winner=body.winner,score_a=scores.get('A'),score_b=scores.get('B')))
-    for p in body.participants: s.add(MatchPlayer(match_id=mid,name=p['name'].strip(),role=p['role'],tier=p['tier'],points=p['points'],team=p['team']))
-    s.commit();return {'ok':True,'id':mid}
+    for p in participants:
+        s.add(MatchPlayer(match_id=mid,name=p['name'],role=p['role'],tier=p['tier'],points=p['points'],team=p['team']))
+    s.delete(pending_row)
+    s.commit()
+    return {'ok':True,'id':mid}
 class MatchEditIn(BaseModel):
     winner:str
 @app.patch('/api/matches/{match_id}')
@@ -331,8 +445,8 @@ def matches(limit:int=Query(50,ge=1,le=200),s:Session=Depends(db)):
     if not ms:return []
     parts=s.scalars(select(MatchPlayer).where(MatchPlayer.match_id.in_([m.id for m in ms]))).all()
     grouped={}
-    for p in parts: grouped.setdefault(p.match_id,[]).append({'name':p.name,'role':p.role,'tier':p.tier,'points':p.points,'team':p.team})
-    return [{'id':m.id,'created_at':m.created_at.isoformat(),'winner':m.winner,'scores':{'A':m.score_a,'B':m.score_b},'participants':grouped.get(m.id,[])} for m in ms]
+    for p in parts: grouped.setdefault(p.match_id,[]).append({'name':p.name,'role':p.role,'team':p.team})
+    return [{'id':m.id,'created_at':m.created_at.isoformat(),'winner':m.winner,'participants':grouped.get(m.id,[])} for m in ms]
 def season_bounds(s:Session,season_id:int|None):
     if season_id is None:return None
     season=s.get(Season,season_id)
