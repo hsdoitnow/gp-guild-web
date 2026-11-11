@@ -569,6 +569,8 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
     total=len(rows)
     recent10=recent[-10:]
     recent_wins=sum(x['won'] for x in recent10)
+    previous10=recent[-20:-10]
+    previous_wins=sum(x['won'] for x in previous10)
     qualified=[(r,v) for r,v in by_role.items() if v[1]>=1]
     qualified.sort(key=lambda x:(-x[1][0]/x[1][1],-x[1][1],x[0]))
     best_role={'role':qualified[0][0],'total':qualified[0][1][1],
@@ -595,5 +597,7 @@ def player_analysis(name:str=Query(...,min_length=1,max_length=100),season_id:in
             'best_streak':best_streak,'worst_streak':worst_streak,'current_streak':current,
             'recent':list(reversed(recent10)),'recent_wins':recent_wins,
             'recent_win_rate':round(100*recent_wins/len(recent10),1) if recent10 else 0,
+            'previous_10_total':len(previous10),'previous_10_wins':previous_wins,
+            'previous_10_win_rate':round(100*previous_wins/len(previous10),1) if previous10 else None,
             'best_role':best_role,'monthly':monthly_data,'monthly_by_role':monthly_role_data,'busiest_month':busiest,
             'score_trend':score_trend,'win_rate_trend':win_rate_trend,'achievements':achievements}
