@@ -207,7 +207,12 @@ function playerAnalytics(p){
  if(!p.total)return '<div class="panel"><p class="muted">선택한 기간에 등록된 경기 기록이 없습니다.</p></div>';
  const pct=n=>Number(n||0).toFixed(1)+'%';
  const metric=(v,l)=>`<div class="analytics-metric"><strong>${esc(String(v))}</strong><span>${l}</span></div>`;
- const r=p.recent||[], recentRate=p.recent_win_rate||0, diff=recentRate-p.win_rate;
+ const r=p.recent||[], recentRate=p.recent_win_rate||0;
+ const previousTotal=Number(p.previous_10_total||0), previousWins=Number(p.previous_10_wins||0);
+ const comparisonReady=r.length===10&&previousTotal===10;
+ const previousRate=previousTotal?100*previousWins/previousTotal:0;
+ const rateDiff=recentRate-previousRate;
+ const playedRoles=roles.filter(role=>Number((p.by_role[role]||{}).total||0)).length;
  const streak=p.current_streak>0?p.current_streak+'연승':p.current_streak<0?(-p.current_streak)+'연패':'없음';
  const recent=r.map(m=>`<span class="${m.won?'win':'loss'}" title="${esc(new Date(m.date).toLocaleString('ko-KR'))} · ${esc(m.role)}">${m.won?'승':'패'}</span>`).join('');
  const roleRows=roles.map(role=>{const x=p.by_role[role]||{total:0,wins:0,losses:0,win_rate:0,score:0};return `<tr><td>${esc(role)}</td><td>${x.total}</td><td>${x.wins}</td><td>${x.losses}</td><td>${x.total?pct(x.win_rate):'-'}</td><td>${x.score}</td></tr>`}).join('');
@@ -222,10 +227,10 @@ function playerAnalytics(p){
  <div class="analytics-top">${metric(p.total,'총 경기')}${metric(p.wins,'승리')}${metric(p.losses,'패배')}${metric(pct(p.win_rate),'승률')}${metric(p.score,'Score')}${metric(p.best_streak+'연승','최다 연승')}</div>
  <div class="analytics-grid">
  <div class="analytics-box"><h4>📅 최근 10경기</h4><div class="analytics-name">${p.recent_wins}승 ${r.length-p.recent_wins}패 · ${pct(recentRate)}</div><div class="analytics-detail">최신 → 과거 순서</div><div class="analytics-history">${recent}</div></div>
- <div class="analytics-box"><h4>📈 최근 경기력 변화</h4><div class="analytics-name ${diff>=0?'analytics-positive':'analytics-negative'}">${diff>0?'+':''}${diff.toFixed(1)}%p</div><div class="analytics-detail">최근 ${r.length}경기 ${pct(recentRate)} / 전체 ${pct(p.win_rate)}</div><div class="analytics-detail">전체 승률 대비 최근 승률 차이</div></div>
+ <div class="analytics-box"><h4>🎮 캐릭터 활용 현황</h4><div class="analytics-name">${playedRoles} / ${roles.length} 캐릭터</div><div class="analytics-detail">${roles.map(role=>`${esc(role)} ${(p.by_role[role]||{}).total||0}경기`).join(" · ")}</div></div>
  <div class="analytics-box"><h4>🔥 연승 / 연패 기록</h4><div class="analytics-name analytics-positive">${p.best_streak}연승 <span class="analytics-detail">최다 연승</span></div><div class="analytics-name analytics-negative" style="margin-top:12px">${p.worst_streak}연패 <span class="analytics-detail">최다 연패</span></div><div class="analytics-detail">현재 흐름: ${streak}</div></div>
  <div class="analytics-box"><h4>🏆 최고 승률 캐릭터</h4><div class="analytics-name">${p.best_role?esc(p.best_role.role):'기록 부족'}</div><div class="analytics-detail">${p.best_role?pct(p.best_role.win_rate)+' · '+p.best_role.total+'경기':'경기 기록 없음'}</div></div>
- <div class="analytics-box"><h4>🗓️ 최다 활동 월</h4><div class="analytics-name">${p.busiest_month?esc(p.busiest_month.month):'-'}</div><div class="analytics-detail">${p.busiest_month?p.busiest_month.total+'경기 · '+p.busiest_month.wins+'승 '+p.busiest_month.losses+'패':'기록 없음'}</div></div>
+ <div class="analytics-box"><h4>📈 최근 경기력 변화</h4>${comparisonReady?`<div class="analytics-name ${rateDiff>=0?'analytics-positive':'analytics-negative'}">${rateDiff>0?'+':''}${rateDiff.toFixed(1)}%p</div><div class="analytics-detail">이전 10경기 ${pct(previousRate)} (${previousWins}승 ${previousTotal-previousWins}패)</div><div class="analytics-detail">최근 10경기 ${pct(recentRate)} (${p.recent_wins}승 ${r.length-p.recent_wins}패)</div>`:`<div class="analytics-name">비교 데이터 부족</div><div class="analytics-detail">최근 10경기와 이전 10경기 비교에는 총 20경기가 필요합니다. (현재 ${p.total}경기)</div>`}</div>
  <div class="analytics-box"><h4>🎮 캐릭터별 승률</h4>${roleBars}</div>
  </div>
  <div class="analytics-section"><h3>🎮 캐릭터별 상세 전적</h3><div class="scroll"><table><tr><th>캐릭터</th><th>경기</th><th>승</th><th>패</th><th>승률</th><th>Score</th></tr>${roleRows}</table></div></div>
