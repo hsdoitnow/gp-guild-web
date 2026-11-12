@@ -350,7 +350,7 @@ def generate_api(body:GenerateIn,s:Session=Depends(db)):
         # Never expose tiers, player scores or team totals to a public client.
         if result.get('mode')=='team':
             generation_id=str(uuid.uuid4())
-            pending={'expires':time.time()+1800,'participants':result['participants'],'scores':result.get('scores',{})}
+            pending={'expires':time.time()+21600,'participants':result['participants'],'scores':result.get('scores',{})}
             s.add(Setting(key='pending:'+generation_id,value=json.dumps(pending,ensure_ascii=False)))
             s.commit()
             result['generation_id']=generation_id
@@ -417,7 +417,7 @@ def record(body:RecordIn,request:Request,s:Session=Depends(db)):
     payload=json.loads(pending_row.value)
     if payload['expires']<time.time():
         s.delete(pending_row);s.commit()
-        raise HTTPException(409,'팀 생성 후 30분이 지났습니다. 다시 생성하세요.')
+        raise HTTPException(409,'팀 생성 후 6시간이 지났습니다. 다시 생성하세요.')
     participants=payload['participants']
     mid=str(uuid.uuid4())
     scores=payload['scores']
