@@ -167,9 +167,11 @@ function restorePendingMatch(){
     if(!item||!item.data||item.data.mode!=='team'||!item.data.generation_id||!Array.isArray(item.data.participants))return;
     if(Date.now()-item.savedAt>GP_PENDING_TTL){clearPendingMatch();toast('6시간이 지난 임시 경기 기록은 만료되었습니다.');return;}
     last=item.data;
+    // Restore before any network request. A sleeping server must not block recovery.
+    tab('team');
     renderResult();$('recordBox').classList.remove('hidden');
     $('pendingSaveStatus').textContent='복원된 경기 · 이 브라우저에 임시 저장됨 (서버 등록 전)';
-    toast('진행 중이던 경기 구성을 복원했습니다.');
+    toast('진행 중이던 경기 구성을 복원했습니다. 서버가 깨어나면 결과를 등록할 수 있습니다.');
   }catch(e){console.warn('Pending match restore failed',e)}
 }
 function discardPendingMatch(){
@@ -186,7 +188,7 @@ async function gpKeepAlive(){
 }
 setInterval(gpKeepAlive,5*60*1000);
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')gpKeepAlive()});
-async function makeTeam(){if(last&&last.mode==='team'&&last.generation_id&&!confirm('진행 중인 경기 구성이 있습니다. 새 조합으로 교체하면 기존 미등록 경기는 복원할 수 없습니다. 계속할까요?'))return;try{let data=await api('/generate',{method:'POST',body:JSON.stringify({players:getPlayers(),mode:document.querySelector('[name=mode]:checked').value,use_diff:$('useDiff').checked,rotate_teams:$('rotateTeams').checked,diff_limit:Number($('diff').value),use_recent:$('useRecent').checked,recent_n:Number($('recent').value)})});last=data;if(data.mode==='team')persistPendingMatch();else clearPendingMatch();genCount++;$('genCount').textContent='생성 횟수: '+genCount;renderResult();$('recordBox').classList.toggle('hidden',data.mode!=='team')}catch(e){toast(e.message)}}
+async function makeTeam(){try{let data=await api('/generate',{method:'POST',body:JSON.stringify({players:getPlayers(),mode:document.querySelector('[name=mode]:checked').value,use_diff:$('useDiff').checked,rotate_teams:$('rotateTeams').checked,diff_limit:Number($('diff').value),use_recent:$('useRecent').checked,recent_n:Number($('recent').value)})});last=data;if(data.mode==='team')persistPendingMatch();else clearPendingMatch();genCount++;$('genCount').textContent='생성 횟수: '+genCount;renderResult();$('recordBox').classList.toggle('hidden',data.mode!=='team')}catch(e){toast(e.message)}}
 function scoreText(value){return typeof value==='number'&&Number.isFinite(value)?Number(value).toFixed(1):'—'}
 function renderResult(){if(!last)return;let lines=[];if(last.mode==='char'){lines.push('🎯 캐릭 분배 결과','');for(let r of roles)lines.push(`${r}: ${last.participants.filter(p=>p.role===r).map(p=>p.name).join(', ')}`)}else{lines.push('🎯 팀 결과','');for(let t of ['A','B']){lines.push(`[팀 ${t} · ${scoreText(last.scores?.[t])}점]`);for(let r of roles){let p=last.participants.find(x=>x.team===t&&x.role===r);lines.push(`  ${r}: ${p.name}`)}lines.push('')}lines.push(`팀 점수 차이: ${scoreText(last.diff)}점`)}$('result').textContent=lines.join('\n')}
 function announce(){if(last.mode==='char')return roles.map(r=>`${r}(${last.participants.filter(p=>p.role===r).map(p=>p.name).join(', ')})`).join(' / ');return ['A','B'].map(t=>`팀[${t}] `+roles.map(r=>`${r==='드루이드'?'드루':r} : ${last.participants.find(p=>p.team===t&&p.role===r).name}`).join(', ')).join('   vs   ')}
@@ -480,7 +482,20 @@ async function applyExcelOverview(){
 }
 function cancelExcelOverview(){excelPreview=null;$('overviewPreview').classList.add('hidden')}
 
-async function init(){let cfg=await api('/config');scores=cfg.scores;$('players').innerHTML=Array.from({length:8},(_,i)=>playerHtml(i)).join('');let datalist=document.createElement('datalist');datalist.id='names';document.body.appendChild(datalist);$('profileRoles').innerHTML=roles.map(r=>`<div class="role"><label><input type="checkbox" data-role="${r}" onchange="this.parentElement.nextElementSibling.disabled=!this.checked"> ${r}</label><select data-role="${r}" disabled>${tiers.map(t=>`<option>${t}</option>`).join('')}</select></div>`).join('');drawScores();$('seasonEdit').addEventListener('change',editSeasonForm);await refreshAdmin();await fetchProfiles();await loadSeasons();restorePendingMatch()}
-init().catch(e=>toast('서버 연결 실패: '+e.message));
+async function init(){
+  // Build UI and recover pending match synchronously, BEFORE fetching server data.
+  $('players').innerHTML=Array.from({length:8},(_,i)=>playerHtml(i)).join('');
+  let datalist=document.createElement('datalist');datalist.id='names';document.body.appendChild(datalist);
+  $('profileRoles').innerHTML=roles.map(r=>`<div class="role"><label><input type="checkbox" data-role="${r}" onchange="this.parentElement.nextElementSibling.disabled=!this.checked"> ${r}</label><select data-role="${r}" disabled>${tiers.map(t=>`<option>${t}</option>`).join('')}</select></div>`).join('');
+  $('seasonEdit').addEventListener('change',editSeasonForm);
+  restorePendingMatch();
+  // A failed request must not interrupt recovery or block subsequent initialization.
+  const tasks=[
+    async()=>{const cfg=await api('/config');scores=cfg.scores;drawScores()},
+    refreshAdmin, fetchProfiles, loadSeasons
+  ];
+  for(const task of tasks){try{await task()}catch(e){console.warn('Initialization request failed:',e);}}
+}
+init().catch(e=>toast('화면 초기화 오류: '+e.message));
 setupManualMatch();
 </script></body></html>
